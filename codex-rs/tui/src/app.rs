@@ -760,7 +760,7 @@ fn normalize_harness_overrides_for_cwd(
 }
 
 impl App {
-    fn maybe_start_control_plane(&mut self) {
+    async fn maybe_start_control_plane(&mut self) {
         if self.control_plane.is_some()
             || !self.config.control_plane.enabled
             || !matches!(
@@ -2262,7 +2262,7 @@ impl App {
             pending_primary_events: VecDeque::new(),
         };
 
-        app.maybe_start_control_plane();
+        app.maybe_start_control_plane().await;
         app.maybe_begin_control_plane_startup_flow();
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -2835,7 +2835,7 @@ impl App {
                     Ok(()) => {
                         self.config.control_plane.consent = Some(consent);
                         if consent == ControlPlaneConsent::Accepted {
-                            self.maybe_start_control_plane();
+                            self.maybe_start_control_plane().await;
                             self.maybe_open_control_plane_setup_or_picker();
                         }
                     }
@@ -4492,7 +4492,7 @@ mod tests {
         app.config.control_plane.enabled = true;
         app.config.control_plane.consent = Some(ControlPlaneConsent::Accepted);
         app.config.control_plane.ipc_dir = temp_dir.path().join("instances");
-        app.maybe_start_control_plane();
+        app.maybe_start_control_plane().await;
 
         let thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("thread id");
@@ -4567,6 +4567,14 @@ mod tests {
             .expect("control plane should be running")
             .snapshot();
         assert_eq!(snapshot.active_turn, None);
+        if let Some(control_plane) = app.control_plane.take() {
+            std::mem::forget(control_plane);
+        }
+        let _ = app
+            .server
+            .shutdown_all_threads_bounded(Duration::from_secs(5))
+            .await;
+        app.reset_thread_event_state();
         Ok(())
     }
 

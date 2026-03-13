@@ -3,10 +3,15 @@
 set -euo pipefail
 
 CODEX_CHANNELS_DEFAULT_CONFIG_PATH="${HOME}/.codex/config.toml"
+CODEX_CHANNELS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 die() {
   printf 'error: %s\n' "$*" >&2
   exit 1
+}
+
+warn() {
+  printf 'warning: %s\n' "$*" >&2
 }
 
 usage_error() {
@@ -147,26 +152,43 @@ build_publish_payload_json() {
   local channel="$1"
   local message="$2"
   local idempotency_key="$3"
+  local exclude_instance_id="${4:-}"
 
   if ! command -v python3 >/dev/null 2>&1; then
     die "python3 is required to build the publish payload"
   fi
 
-  python3 - "$channel" "$message" "$idempotency_key" <<'PY'
+  python3 - "$channel" "$message" "$idempotency_key" "$exclude_instance_id" <<'PY'
 import json
 import sys
 
-channel, message, idempotency_key = sys.argv[1:4]
-print(
-    json.dumps(
-        {
-            "channel": channel,
-            "text": message,
-            "idempotencyKey": idempotency_key,
-        }
-    )
-)
+channel, message, idempotency_key, exclude_instance_id = sys.argv[1:5]
+payload = {
+    "channel": channel,
+    "text": message,
+    "idempotencyKey": idempotency_key,
+}
+if exclude_instance_id:
+    payload["excludeInstanceId"] = exclude_instance_id
+print(json.dumps(payload))
 PY
+}
+
+resolve_local_exclude_instance_id() {
+  if [ -z "${CODEX_THREAD_ID:-}" ]; then
+    return 1
+  fi
+
+  local helper_path="$CODEX_CHANNELS_SCRIPT_DIR/resolve-local-instance-id.py"
+  local helper_output
+  if helper_output="$(python3 "$helper_path" 2>&1)"; then
+    printf '%s\n' "$helper_output"
+    return 0
+  fi
+
+  helper_output="${helper_output//$'\n'/ }"
+  warn "$helper_output"
+  return 1
 }
 
 build_create_channel_payload_json() {

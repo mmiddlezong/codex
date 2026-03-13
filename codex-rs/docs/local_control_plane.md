@@ -49,6 +49,9 @@ Each interactive TUI instance gets its own local socket under `control_plane.ipc
 External tools should enumerate socket files in that directory and call `status` to identify the
 right instance.
 
+When multiple local Codex instances are running, `current-session` can be used to match a socket
+to a specific `CODEX_THREAD_ID`, then `status` can be used to read that socket's `instanceId`.
+
 The socket is created only after consent is accepted.
 
 ## Request Format

@@ -8,19 +8,22 @@ source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: send-channel-message.sh [--server-url URL] [--token TOKEN] [--idempotency-key KEY] <channel> [message...]
+Usage: send-channel-message.sh [--server-url URL] [--token TOKEN] [--idempotency-key KEY] [--exclude-instance-id ID] [--include-self] <channel> [message...]
 
 Send a channel-server message to the given channel.
 
 Examples:
   send-channel-message.sh ops "Please summarize the blocker."
   printf 'line 1\nline 2\n' | send-channel-message.sh ops
+  send-channel-message.sh --include-self ops "Broadcast this to every subscriber, including me."
 EOF
 }
 
 server_url=""
 token=""
 idempotency_key=""
+exclude_instance_id=""
+include_self=false
 positionals=()
 
 while [ "$#" -gt 0 ]; do
@@ -39,6 +42,15 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || usage_error "--idempotency-key requires a value"
       idempotency_key="$2"
       shift 2
+      ;;
+    --exclude-instance-id)
+      [ "$#" -ge 2 ] || usage_error "--exclude-instance-id requires a value"
+      exclude_instance_id="$2"
+      shift 2
+      ;;
+    --include-self)
+      include_self=true
+      shift
       ;;
     -h|--help)
       usage
@@ -89,5 +101,11 @@ if [ -z "$idempotency_key" ]; then
   idempotency_key="$(generate_idempotency_key)"
 fi
 
-payload="$(build_publish_payload_json "$channel" "$message" "$idempotency_key")"
+if [ -z "$exclude_instance_id" ] && [ "$include_self" = false ] && [ -n "${CODEX_THREAD_ID:-}" ]; then
+  if resolved_instance_id="$(resolve_local_exclude_instance_id)"; then
+    exclude_instance_id="$resolved_instance_id"
+  fi
+fi
+
+payload="$(build_publish_payload_json "$channel" "$message" "$idempotency_key" "$exclude_instance_id")"
 api_request "POST" "$resolved_url" "$resolved_token" "/v1/messages" "$payload"

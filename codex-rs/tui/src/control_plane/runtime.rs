@@ -400,7 +400,7 @@ async fn build_receipt(
     let steer_result = local_control_plane
         .apply_steer(ApplySteerRequest {
             expected_turn_id: current_turn.turn_id.clone(),
-            text: text.to_string(),
+            text: format_channel_steer_message(channel, text),
             idempotency_key: message_id.to_string(),
             metadata: Some(json!({
                 "channel": channel,
@@ -443,6 +443,146 @@ async fn build_receipt(
     }
 }
 
+fn format_channel_steer_message(channel: &str, text: &str) -> String {
+    let quoted_message = text
+        .split('\n')
+        .map(|line| {
+            if line.is_empty() {
+                ">".to_string()
+            } else {
+                format!("> {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        "You have received a message from another Codex instance in the channel {channel}. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n{quoted_message}"
+    )
+}
+
 fn send_wrapper_warning(app_event_tx: &AppEventSender, message: String) {
     app_event_tx.send(AppEvent::ControlPlaneWrapperWarning { message });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use codex_control_plane::ControlPlaneConfig;
+    use codex_control_plane::LaunchKind;
+    use codex_control_plane::SteerDelegate;
+    use codex_control_plane::SteerError;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+    use tempfile::tempdir;
+
+    #[test]
+    fn format_channel_steer_message_single_line() {
+        assert_eq!(
+            format_channel_steer_message("ops", "hello world"),
+            "You have received a message from another Codex instance in the channel ops. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n> hello world"
+        );
+    }
+
+    #[test]
+    fn format_channel_steer_message_multiline() {
+        assert_eq!(
+            format_channel_steer_message("ops", "line one\nline two"),
+            "You have received a message from another Codex instance in the channel ops. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n> line one\n> line two"
+        );
+    }
+
+    #[test]
+    fn format_channel_steer_message_preserves_blank_lines() {
+        assert_eq!(
+            format_channel_steer_message("ops", "line one\n\nline three"),
+            "You have received a message from another Codex instance in the channel ops. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n> line one\n>\n> line three"
+        );
+    }
+
+    #[test]
+    fn format_channel_steer_message_preserves_whitespace() {
+        assert_eq!(
+            format_channel_steer_message("ops", "  padded  \ntrailing  "),
+            "You have received a message from another Codex instance in the channel ops. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n>   padded  \n> trailing  "
+        );
+    }
+
+    #[derive(Default)]
+    struct RecordingDelegate {
+        requests: Mutex<Vec<(String, String, String)>>,
+    }
+
+    #[async_trait]
+    impl SteerDelegate for RecordingDelegate {
+        async fn apply_steer(
+            &self,
+            thread_id: &str,
+            expected_turn_id: &str,
+            text: String,
+        ) -> Result<String, SteerError> {
+            self.requests.lock().expect("lock").push((
+                thread_id.to_string(),
+                expected_turn_id.to_string(),
+                text,
+            ));
+            Ok("turn-1".to_string())
+        }
+    }
+
+    fn test_control_plane(delegate: Arc<dyn SteerDelegate>) -> Arc<LocalControlPlane> {
+        let temp_dir = tempdir().expect("tempdir");
+        let control_plane = LocalControlPlane::start(
+            ControlPlaneConfig {
+                feature_enabled: true,
+                consent_accepted: true,
+                steering_enabled: true,
+                ipc_dir: temp_dir.path().join("instances"),
+                launch_kind: LaunchKind::Fresh,
+            },
+            delegate,
+        )
+        .expect("control plane");
+        let control_plane = Arc::new(control_plane);
+        control_plane.register_session(
+            "thread-1".to_string(),
+            Some("demo".to_string()),
+            PathBuf::from("/tmp/project"),
+        );
+        control_plane.note_turn_started("turn-1");
+        control_plane
+    }
+
+    #[tokio::test]
+    async fn build_receipt_uses_templated_steer_text() {
+        let delegate = Arc::new(RecordingDelegate::default());
+        let control_plane = test_control_plane(delegate.clone());
+
+        let receipt = build_receipt(
+            &control_plane,
+            "msg-1",
+            "ops",
+            "hello\n\nworld",
+            Some(json!({"source": "test"})),
+        )
+        .await;
+
+        assert_eq!(receipt.r#type, "message_result");
+        assert_eq!(receipt.message_id, "msg-1");
+        assert_eq!(receipt.outcome, "steered");
+        assert_eq!(receipt.turn_id, Some("turn-1".to_string()));
+        assert_eq!(receipt.detail, None);
+
+        let requests = delegate.requests.lock().expect("lock");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0, "thread-1");
+        assert_eq!(requests[0].1, "turn-1");
+        assert_eq!(
+            requests[0].2,
+            "You have received a message from another Codex instance in the channel ops. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n> hello\n>\n> world"
+        );
+        std::mem::forget(control_plane);
+    }
 }
