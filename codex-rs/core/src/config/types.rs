@@ -557,6 +557,57 @@ pub struct AppsConfigToml {
     pub apps: HashMap<String, AppConfig>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ControlPlaneConsent {
+    Accepted,
+    Declined,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlPlaneConfig {
+    pub enabled: bool,
+    pub consent: Option<ControlPlaneConsent>,
+    pub ipc_dir: PathBuf,
+    pub steering_enabled: bool,
+    pub server_url: Option<String>,
+    pub server_token: Option<String>,
+    pub channel_subscriptions: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ControlPlaneConfigToml {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub consent: Option<ControlPlaneConsent>,
+    #[serde(default)]
+    pub ipc_dir: Option<AbsolutePathBuf>,
+    #[serde(default = "default_true")]
+    pub steering_enabled: bool,
+    #[serde(default)]
+    pub server_url: Option<String>,
+    #[serde(default)]
+    pub server_token: Option<String>,
+    #[serde(default)]
+    pub channel_subscriptions: Option<Vec<String>>,
+}
+
+impl Default for ControlPlaneConfigToml {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            consent: None,
+            ipc_dir: None,
+            steering_enabled: true,
+            server_url: None,
+            server_token: None,
+            channel_subscriptions: None,
+        }
+    }
+}
+
 // ===== OTEL configuration =====
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]

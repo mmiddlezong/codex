@@ -3928,6 +3928,14 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn show_bottom_pane_view(
+        &mut self,
+        view: Box<dyn crate::bottom_pane::BottomPaneView>,
+    ) {
+        self.bottom_pane.show_view(view);
+        self.request_redraw();
+    }
+
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
         self.bottom_pane.no_modal_or_popup_active()
     }
@@ -4208,6 +4216,11 @@ impl ChatWidget {
             }
             SlashCommand::Theme => {
                 self.open_theme_picker();
+            }
+            SlashCommand::Channels => {
+                self.app_event_tx.send(AppEvent::OpenChannelsPopup {
+                    origin: crate::app_event::ControlPlaneFlowOrigin::SlashCommand,
+                });
             }
             SlashCommand::Ps => {
                 self.add_ps_output();

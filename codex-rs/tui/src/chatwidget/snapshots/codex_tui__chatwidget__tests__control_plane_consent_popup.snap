@@ -1,0 +1,19 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Local control-plane access
+
+  Allow a local process on this machine to inspect this Codex
+  session and steer only the currently active turn.
+
+  This creates a per-instance local socket only after you opt
+  in. Declining keeps the feature dormant and Codex will ask
+  again on the next launch.
+
+› 1. Allow local control plane  Start the local IPC socket for this
+                                session.
+  2. Decline for now            Do not start the socket for this
+                                launch.
+
+  Press enter to confirm or esc to go back

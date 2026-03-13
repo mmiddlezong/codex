@@ -1803,6 +1803,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-control-plane"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uds_windows",
+ "uuid",
+]
+
+[[package]]
 name = "codex-core"
 version = "0.0.0"
 dependencies = [
@@ -2480,6 +2495,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "assert_matches",
+ "async-trait",
  "base64 0.22.1",
  "chrono",
  "clap",
@@ -2490,6 +2506,7 @@ dependencies = [
  "codex-chatgpt",
  "codex-cli",
  "codex-cloud-requirements",
+ "codex-control-plane",
  "codex-core",
  "codex-feedback",
  "codex-file-search",
@@ -2517,6 +2534,7 @@ dependencies = [
  "diffy",
  "dirs",
  "dunce",
+ "futures",
  "hound",
  "image",
  "insta",
@@ -2545,6 +2563,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
+ "tokio-tungstenite",
  "tokio-util",
  "toml 0.9.11+spec-1.1.0",
  "tracing",

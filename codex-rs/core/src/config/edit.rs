@@ -1,3 +1,4 @@
+use crate::config::types::ControlPlaneConsent;
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
 use crate::path_utils::resolve_symlink_write_paths;
@@ -77,6 +78,24 @@ pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
         segments: vec!["tui".to_string(), "status_line".to_string()],
         value: TomlItem::Value(array.into()),
     }
+}
+
+pub fn control_plane_consent_edit(consent: ControlPlaneConsent) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["control_plane".to_string(), "consent".to_string()],
+        value: value(match consent {
+            ControlPlaneConsent::Accepted => "accepted",
+            ControlPlaneConsent::Declined => "declined",
+        }),
+    }
+}
+
+fn string_array_item(values: &[String]) -> TomlItem {
+    let mut array = toml_edit::Array::new();
+    for value in values {
+        array.push(value.clone());
+    }
+    TomlItem::Value(array.into())
 }
 
 pub fn model_availability_nux_count_edits(shown_count: &HashMap<String, u32>) -> Vec<ConfigEdit> {
@@ -862,6 +881,47 @@ impl ConfigEditsBuilder {
         self.edits.push(ConfigEdit::SetPath {
             segments: vec!["features".to_string(), key.to_string()],
             value: value(enabled),
+        });
+        self
+    }
+
+    pub fn set_control_plane_consent(mut self, consent: ControlPlaneConsent) -> Self {
+        self.edits.push(control_plane_consent_edit(consent));
+        self
+    }
+
+    pub fn set_control_plane_server_url(mut self, server_url: Option<&str>) -> Self {
+        let segments = vec!["control_plane".to_string(), "server_url".to_string()];
+        match server_url {
+            Some(server_url) => self.edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(server_url),
+            }),
+            None => self.edits.push(ConfigEdit::ClearPath { segments }),
+        }
+        self
+    }
+
+    pub fn set_control_plane_server_token(mut self, server_token: Option<&str>) -> Self {
+        let segments = vec!["control_plane".to_string(), "server_token".to_string()];
+        match server_token {
+            Some(server_token) => self.edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(server_token),
+            }),
+            None => self.edits.push(ConfigEdit::ClearPath { segments }),
+        }
+        self
+    }
+
+    pub fn set_control_plane_channel_subscriptions(mut self, channels: &[String]) -> Self {
+        let segments = vec![
+            "control_plane".to_string(),
+            "channel_subscriptions".to_string(),
+        ];
+        self.edits.push(ConfigEdit::SetPath {
+            segments,
+            value: string_array_item(channels),
         });
         self
     }

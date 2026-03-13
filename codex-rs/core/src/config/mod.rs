@@ -2,6 +2,8 @@ use crate::auth::AuthCredentialsStoreMode;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::AppsConfigToml;
+use crate::config::types::ControlPlaneConfig;
+use crate::config::types::ControlPlaneConfigToml;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
@@ -538,6 +540,9 @@ pub struct Config {
     /// When `false`, disables feedback collection across Codex product surfaces.
     /// Defaults to `true`.
     pub feedback_enabled: bool,
+
+    /// Local-only control-plane integration settings.
+    pub control_plane: ControlPlaneConfig,
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config::types::OtelConfig,
@@ -1310,6 +1315,10 @@ pub struct ConfigToml {
     /// Settings for app-specific controls.
     #[serde(default)]
     pub apps: Option<AppsConfigToml>,
+
+    /// Local-only control-plane integration settings.
+    #[serde(default)]
+    pub control_plane: Option<ControlPlaneConfigToml>,
 
     /// OTEL configuration.
     pub otel: Option<crate::config::types::OtelConfigToml>,
@@ -2360,6 +2369,12 @@ impl Config {
             } else {
                 NetworkSandboxPolicy::from(&effective_sandbox_policy)
             };
+        let control_plane_ipc_dir = cfg
+            .control_plane
+            .as_ref()
+            .and_then(|control_plane| control_plane.ipc_dir.clone())
+            .map(Into::into)
+            .unwrap_or_else(|| codex_home.join("control-plane/instances"));
 
         let config = Self {
             model,
@@ -2493,6 +2508,18 @@ impl Config {
                 .as_ref()
                 .and_then(|feedback| feedback.enabled)
                 .unwrap_or(true),
+            control_plane: {
+                let control_plane = cfg.control_plane.unwrap_or_default();
+                ControlPlaneConfig {
+                    enabled: control_plane.enabled,
+                    consent: control_plane.consent,
+                    ipc_dir: control_plane_ipc_dir,
+                    steering_enabled: control_plane.steering_enabled,
+                    server_url: control_plane.server_url,
+                    server_token: control_plane.server_token,
+                    channel_subscriptions: control_plane.channel_subscriptions,
+                }
+            },
             tui_notifications: cfg
                 .tui
                 .as_ref()

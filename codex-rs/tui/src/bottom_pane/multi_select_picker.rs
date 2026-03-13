@@ -175,6 +175,18 @@ impl MultiSelectPicker {
         MultiSelectPickerBuilder::new(title, subtitle, app_event_tx)
     }
 
+    pub(crate) fn enabled_ids(&self) -> Vec<String> {
+        self.items
+            .iter()
+            .filter(|item| item.enabled)
+            .map(|item| item.id.clone())
+            .collect()
+    }
+
+    pub(crate) fn all_ids(&self) -> Vec<String> {
+        self.items.iter().map(|item| item.id.clone()).collect()
+    }
+
     /// Applies the current search query to filter and sort items.
     ///
     /// Updates `filtered_indices` to contain only matching items, sorted by

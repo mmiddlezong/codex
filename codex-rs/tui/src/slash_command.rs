@@ -40,6 +40,7 @@ pub enum SlashCommand {
     DebugConfig,
     Statusline,
     Theme,
+    Channels,
     Mcp,
     Apps,
     Logout,
@@ -85,6 +86,7 @@ impl SlashCommand {
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Theme => "choose a syntax highlighting theme",
+            SlashCommand::Channels => "configure channel subscriptions for the server wrapper",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Clean => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
@@ -160,6 +162,7 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Status
             | SlashCommand::DebugConfig
+            | SlashCommand::Channels
             | SlashCommand::Ps
             | SlashCommand::Clean
             | SlashCommand::Mcp

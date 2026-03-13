@@ -7850,6 +7850,16 @@ async fn feedback_upload_consent_popup_snapshot() {
 }
 
 #[tokio::test]
+async fn control_plane_consent_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.show_selection_view(crate::control_plane::control_plane_consent_prompt());
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("control_plane_consent_popup", popup);
+}
+
+#[tokio::test]
 async fn feedback_good_result_consent_popup_includes_connectivity_diagnostics_filename() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 

@@ -22,6 +22,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::history_cell::HistoryCell;
 
+use codex_core::config::types::ControlPlaneConsent;
 use codex_core::features::Feature;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
@@ -34,6 +35,18 @@ use codex_protocol::protocol::SandboxPolicy;
 pub(crate) enum RealtimeAudioDeviceKind {
     Microphone,
     Speaker,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ControlPlaneFlowOrigin {
+    Startup,
+    SlashCommand,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ControlPlaneCreateChannelResult {
+    pub(crate) channel: String,
+    pub(crate) created: bool,
 }
 
 impl RealtimeAudioDeviceKind {
@@ -431,6 +444,65 @@ pub(crate) enum AppEvent {
     /// Open the upload consent popup for feedback after selecting a category.
     OpenFeedbackConsent {
         category: FeedbackCategory,
+    },
+
+    /// Open the control-plane channels popup.
+    OpenChannelsPopup {
+        origin: ControlPlaneFlowOrigin,
+    },
+
+    /// Persist the local control-plane consent decision and update runtime state.
+    ControlPlaneConsentSelected {
+        consent: ControlPlaneConsent,
+    },
+
+    /// Persist a control-plane server URL entered by the user.
+    ControlPlaneServerUrlSubmitted {
+        url: String,
+    },
+
+    /// Persist a control-plane bearer token entered by the user.
+    ControlPlaneServerTokenSubmitted {
+        token: String,
+    },
+
+    /// Async result of fetching channels from the remote server.
+    ControlPlaneChannelListLoaded {
+        result: Result<Vec<String>, String>,
+    },
+
+    /// Confirmed channel list from the picker.
+    ControlPlaneChannelsSelected {
+        channels: Vec<String>,
+    },
+
+    /// Channel selection flow was dismissed without changing the live wrapper.
+    ControlPlaneChannelsSelectionCancelled,
+
+    /// Request to create a channel while preserving current picker state.
+    ControlPlaneCreateChannelRequested {
+        available_channels: Vec<String>,
+        selected_channels: Vec<String>,
+    },
+
+    /// Submitted name for a new channel.
+    ControlPlaneCreateChannelSubmitted {
+        name: String,
+    },
+
+    /// Async result of creating a channel on the server.
+    ControlPlaneCreateChannelCompleted {
+        result: Result<ControlPlaneCreateChannelResult, String>,
+    },
+
+    /// Persist or skip persisting the selected channels for future runs.
+    ControlPlaneSaveChannelSelection {
+        save: bool,
+    },
+
+    /// Non-blocking wrapper warning surfaced in the TUI.
+    ControlPlaneWrapperWarning {
+        message: String,
     },
 
     /// Launch the external editor after a normal draw has completed.

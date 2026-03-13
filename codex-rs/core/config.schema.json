@@ -589,6 +589,58 @@
       },
       "type": "object"
     },
+    "ControlPlaneConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "channel_subscriptions": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "consent": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ControlPlaneConsent"
+            }
+          ],
+          "default": null
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "ipc_dir": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "default": null
+        },
+        "server_token": {
+          "default": null,
+          "type": "string"
+        },
+        "server_url": {
+          "default": null,
+          "type": "string"
+        },
+        "steering_enabled": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ControlPlaneConsent": {
+      "enum": [
+        "accepted",
+        "declined"
+      ],
+      "type": "string"
+    },
     "FeedbackConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -1781,6 +1833,15 @@
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
       "type": "string"
+    },
+    "control_plane": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ControlPlaneConfigToml"
+        }
+      ],
+      "default": null,
+      "description": "Local-only control-plane integration settings."
     },
     "default_permissions": {
       "description": "Default named permissions profile to apply from the `[permissions]` table.",

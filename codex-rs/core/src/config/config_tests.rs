@@ -2,6 +2,7 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
 use crate::config::types::BundledSkillsConfig;
+use crate::config::types::ControlPlaneConsent;
 use crate::config::types::FeedbackConfigToml;
 use crate::config::types::HistoryPersistence;
 use crate::config::types::McpServerTransportConfig;
@@ -51,6 +52,62 @@ fn stdio_mcp(command: &str) -> McpServerConfig {
         scopes: None,
         oauth_resource: None,
     }
+}
+
+#[test]
+fn control_plane_toml_parses() {
+    let ipc_dir = std::env::temp_dir().join("codex-control-plane-test");
+    let parsed: ConfigToml = toml::from_str(&format!(
+        r#"
+[control_plane]
+enabled = true
+consent = "accepted"
+ipc_dir = '{}'
+steering_enabled = false
+server_url = "https://example.invalid"
+server_token = "secret-token"
+channel_subscriptions = ["alpha", "beta"]
+"#,
+        ipc_dir.display()
+    ))
+    .expect("control plane config should parse");
+
+    assert_eq!(
+        parsed.control_plane,
+        Some(ControlPlaneConfigToml {
+            enabled: true,
+            consent: Some(ControlPlaneConsent::Accepted),
+            ipc_dir: Some(AbsolutePathBuf::try_from(ipc_dir).expect("absolute path")),
+            steering_enabled: false,
+            server_url: Some("https://example.invalid".to_string()),
+            server_token: Some("secret-token".to_string()),
+            channel_subscriptions: Some(vec!["alpha".to_string(), "beta".to_string()]),
+        })
+    );
+}
+
+#[tokio::test]
+async fn control_plane_defaults_resolve_from_codex_home() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.control_plane,
+        ControlPlaneConfig {
+            enabled: false,
+            consent: None,
+            ipc_dir: codex_home.path().join("control-plane/instances"),
+            steering_enabled: true,
+            server_url: None,
+            server_token: None,
+            channel_subscriptions: None,
+        }
+    );
+
+    Ok(())
 }
 
 fn http_mcp(url: &str) -> McpServerConfig {
@@ -4158,6 +4215,15 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
+            control_plane: ControlPlaneConfig {
+                enabled: false,
+                consent: None,
+                ipc_dir: fixture.codex_home().join("control-plane/instances"),
+                steering_enabled: true,
+                server_url: None,
+                server_token: None,
+                channel_subscriptions: None,
+            },
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
             tui_theme: None,
@@ -4294,6 +4360,15 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
+        control_plane: ControlPlaneConfig {
+            enabled: false,
+            consent: None,
+            ipc_dir: fixture.codex_home().join("control-plane/instances"),
+            steering_enabled: true,
+            server_url: None,
+            server_token: None,
+            channel_subscriptions: None,
+        },
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
         tui_theme: None,
@@ -4428,6 +4503,15 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         analytics_enabled: Some(false),
         feedback_enabled: true,
+        control_plane: ControlPlaneConfig {
+            enabled: false,
+            consent: None,
+            ipc_dir: fixture.codex_home().join("control-plane/instances"),
+            steering_enabled: true,
+            server_url: None,
+            server_token: None,
+            channel_subscriptions: None,
+        },
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
         tui_theme: None,
@@ -4548,6 +4632,15 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
+        control_plane: ControlPlaneConfig {
+            enabled: false,
+            consent: None,
+            ipc_dir: fixture.codex_home().join("control-plane/instances"),
+            steering_enabled: true,
+            server_url: None,
+            server_token: None,
+            channel_subscriptions: None,
+        },
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
         tui_theme: None,

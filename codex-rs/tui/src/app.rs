@@ -14,6 +14,23 @@ use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
 use crate::chatwidget::ThreadInputState;
+use crate::control_plane::ChannelPickerView;
+use crate::control_plane::ChannelSelectionState;
+use crate::control_plane::ChannelServerClient;
+use crate::control_plane::RemoteChannelWrapper;
+use crate::control_plane::RemoteChannelWrapperConfig;
+use crate::control_plane::control_plane_consent_prompt;
+use crate::control_plane::control_plane_create_channel_prompt;
+use crate::control_plane::control_plane_save_channels_prompt;
+use crate::control_plane::control_plane_server_token_prompt;
+use crate::control_plane::control_plane_server_url_prompt;
+use crate::control_plane::launch_kind_from_session_selection;
+use crate::control_plane::merge_available_channels;
+use crate::control_plane::normalize_channel_name;
+use crate::control_plane::persist_control_plane_consent;
+use crate::control_plane::should_prompt_for_control_plane_consent;
+use crate::control_plane::should_prompt_for_control_plane_setup;
+use crate::control_plane::start_control_plane;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -40,6 +57,9 @@ use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_control_plane::FinishedTurnStatus;
+use codex_control_plane::LaunchKind;
+use codex_control_plane::LocalControlPlane;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
@@ -48,6 +68,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::types::ControlPlaneConsent;
 use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::Feature;
@@ -79,6 +100,7 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TurnAbortReason;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -697,6 +719,10 @@ pub(crate) struct App {
     pending_shutdown_exit_thread_id: Option<ThreadId>,
 
     windows_sandbox: WindowsSandboxState,
+    control_plane: Option<Arc<LocalControlPlane>>,
+    control_plane_launch_kind: LaunchKind,
+    control_plane_channel_flow: Option<ChannelSelectionState>,
+    control_plane_wrapper: Option<RemoteChannelWrapper>,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
@@ -705,6 +731,7 @@ pub(crate) struct App {
     active_thread_rx: Option<mpsc::Receiver<Event>>,
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
+    primary_active_turn_id: Option<String>,
     pending_primary_events: VecDeque<Event>,
 }
 
@@ -733,6 +760,274 @@ fn normalize_harness_overrides_for_cwd(
 }
 
 impl App {
+    fn maybe_start_control_plane(&mut self) {
+        if self.control_plane.is_some()
+            || !self.config.control_plane.enabled
+            || !matches!(
+                self.config.control_plane.consent,
+                Some(ControlPlaneConsent::Accepted)
+            )
+        {
+            return;
+        }
+
+        match start_control_plane(
+            &self.config,
+            self.server.clone(),
+            self.control_plane_launch_kind,
+        ) {
+            Ok(control_plane) => {
+                let control_plane = Arc::new(control_plane);
+                if let Some(session) = &self.primary_session_configured {
+                    control_plane.register_session(
+                        session.session_id.to_string(),
+                        session.thread_name.clone(),
+                        session.cwd.clone(),
+                    );
+                }
+                if let Some(turn_id) = self.primary_active_turn_id.as_deref() {
+                    control_plane.note_turn_started(turn_id);
+                }
+                self.control_plane = Some(control_plane);
+            }
+            Err(err) => {
+                tracing::error!(error = %err, "failed to start local control-plane IPC");
+            }
+        }
+    }
+
+    fn maybe_open_control_plane_consent_prompt(&mut self) {
+        if should_prompt_for_control_plane_consent(&self.config) {
+            self.chat_widget
+                .show_selection_view(control_plane_consent_prompt());
+        }
+    }
+
+    fn maybe_begin_control_plane_startup_flow(&mut self) {
+        if should_prompt_for_control_plane_consent(&self.config) {
+            self.maybe_open_control_plane_consent_prompt();
+            return;
+        }
+        if !self.config.control_plane.enabled
+            || !matches!(
+                self.config.control_plane.consent,
+                Some(ControlPlaneConsent::Accepted)
+            )
+        {
+            return;
+        }
+        if self.control_plane_channel_flow.is_none() {
+            self.control_plane_channel_flow = Some(ChannelSelectionState {
+                origin: crate::app_event::ControlPlaneFlowOrigin::Startup,
+                available_channels: merge_available_channels(
+                    &[],
+                    self.config
+                        .control_plane
+                        .channel_subscriptions
+                        .as_deref()
+                        .unwrap_or_default(),
+                ),
+                selected_channels: self
+                    .config
+                    .control_plane
+                    .channel_subscriptions
+                    .clone()
+                    .unwrap_or_default(),
+            });
+        }
+        self.maybe_open_control_plane_setup_or_picker();
+    }
+
+    fn maybe_open_control_plane_setup_or_picker(&mut self) {
+        if should_prompt_for_control_plane_setup(&self.config) {
+            if self.config.control_plane.server_url.is_none() {
+                self.show_control_plane_server_url_prompt();
+                return;
+            }
+            if self.config.control_plane.server_token.is_none() {
+                self.show_control_plane_server_token_prompt();
+                return;
+            }
+        }
+        self.fetch_control_plane_channels();
+    }
+
+    fn show_control_plane_server_url_prompt(&mut self) {
+        let view = control_plane_server_url_prompt(self.app_event_tx.clone());
+        self.chat_widget.show_bottom_pane_view(Box::new(view));
+    }
+
+    fn show_control_plane_server_token_prompt(&mut self) {
+        let view = control_plane_server_token_prompt(self.app_event_tx.clone());
+        self.chat_widget.show_bottom_pane_view(Box::new(view));
+    }
+
+    fn show_control_plane_create_channel_prompt(&mut self) {
+        let view = control_plane_create_channel_prompt(self.app_event_tx.clone());
+        self.chat_widget.show_bottom_pane_view(Box::new(view));
+    }
+
+    fn open_control_plane_channel_picker(&mut self) {
+        let Some(flow) = &self.control_plane_channel_flow else {
+            return;
+        };
+        let view = ChannelPickerView::new(
+            merge_available_channels(&flow.available_channels, &flow.selected_channels),
+            flow.selected_channels.clone(),
+            self.app_event_tx.clone(),
+        );
+        self.chat_widget.show_bottom_pane_view(Box::new(view));
+    }
+
+    fn open_control_plane_save_prompt(&mut self) {
+        let Some(flow) = &self.control_plane_channel_flow else {
+            return;
+        };
+        self.chat_widget
+            .show_selection_view(control_plane_save_channels_prompt(&flow.selected_channels));
+    }
+
+    fn control_plane_server_client(&self) -> Option<ChannelServerClient> {
+        let server_url = self.config.control_plane.server_url.clone()?;
+        let server_token = self.config.control_plane.server_token.clone()?;
+        Some(ChannelServerClient::new(server_url, server_token))
+    }
+
+    fn fetch_control_plane_channels(&self) {
+        let Some(client) = self.control_plane_server_client() else {
+            return;
+        };
+        let tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = client.list_channels().await;
+            tx.send(AppEvent::ControlPlaneChannelListLoaded { result });
+        });
+    }
+
+    fn create_control_plane_channel(&self, name: String) {
+        let Some(client) = self.control_plane_server_client() else {
+            return;
+        };
+        let tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = client.create_channel(&name).await;
+            tx.send(AppEvent::ControlPlaneCreateChannelCompleted { result });
+        });
+    }
+
+    fn start_or_update_control_plane_wrapper(&mut self, channels: Vec<String>) {
+        let Some(control_plane) = &self.control_plane else {
+            return;
+        };
+        let Some(client) = self.control_plane_server_client() else {
+            return;
+        };
+        let wrapper_id = control_plane.instance_id().to_string();
+        let label = self
+            .primary_session_configured
+            .as_ref()
+            .and_then(|session| session.thread_name.clone());
+        let hostname = std::env::var("HOSTNAME")
+            .or_else(|_| std::env::var("COMPUTERNAME"))
+            .unwrap_or_else(|_| "unknown-host".to_string());
+
+        if let Some(wrapper) = &self.control_plane_wrapper {
+            wrapper.update_channels(channels);
+            return;
+        }
+
+        self.control_plane_wrapper =
+            Some(RemoteChannelWrapper::start(RemoteChannelWrapperConfig {
+                client,
+                local_control_plane: Arc::clone(control_plane),
+                app_event_tx: self.app_event_tx.clone(),
+                channels,
+                wrapper_id: wrapper_id.clone(),
+                instance_id: wrapper_id,
+                hostname,
+                label,
+            }));
+    }
+
+    fn maybe_save_control_plane_channels(&mut self, save: bool) -> color_eyre::eyre::Result<()> {
+        let Some(flow) = self.control_plane_channel_flow.take() else {
+            return Ok(());
+        };
+        if save {
+            ConfigEditsBuilder::new(&self.config.codex_home)
+                .set_control_plane_channel_subscriptions(&flow.selected_channels)
+                .apply_blocking()
+                .map_err(|err| {
+                    std::io::Error::other(format!(
+                        "failed to persist control-plane channel subscriptions: {err}"
+                    ))
+                })?;
+            self.config.control_plane.channel_subscriptions = Some(flow.selected_channels.clone());
+        }
+        self.start_or_update_control_plane_wrapper(flow.selected_channels);
+        Ok(())
+    }
+
+    fn clear_control_plane_session(&mut self, reason: &str) {
+        self.primary_active_turn_id = None;
+        if let Some(control_plane) = &self.control_plane {
+            control_plane.clear_session(reason);
+        }
+    }
+
+    fn track_primary_event(&mut self, event: &Event) {
+        match &event.msg {
+            EventMsg::SessionConfigured(session) => {
+                self.primary_session_configured = Some(session.clone());
+                self.primary_active_turn_id = None;
+                if let Some(control_plane) = &self.control_plane {
+                    control_plane.register_session(
+                        session.session_id.to_string(),
+                        session.thread_name.clone(),
+                        session.cwd.clone(),
+                    );
+                }
+            }
+            EventMsg::TurnStarted(turn) => {
+                self.primary_active_turn_id = Some(turn.turn_id.clone());
+                if let Some(control_plane) = &self.control_plane {
+                    control_plane.note_turn_started(&turn.turn_id);
+                }
+            }
+            EventMsg::TurnComplete(turn) => {
+                if self.primary_active_turn_id.as_deref() == Some(turn.turn_id.as_str()) {
+                    self.primary_active_turn_id = None;
+                }
+                if let Some(control_plane) = &self.control_plane {
+                    control_plane
+                        .note_turn_finished(Some(&turn.turn_id), FinishedTurnStatus::Completed);
+                }
+            }
+            EventMsg::TurnAborted(turn) => {
+                if turn.turn_id.is_none()
+                    || turn.turn_id.as_deref() == self.primary_active_turn_id.as_deref()
+                {
+                    self.primary_active_turn_id = None;
+                }
+                if let Some(control_plane) = &self.control_plane {
+                    control_plane.note_turn_finished(
+                        turn.turn_id.as_deref(),
+                        match turn.reason {
+                            TurnAbortReason::Interrupted => FinishedTurnStatus::Interrupted,
+                            TurnAbortReason::Replaced | TurnAbortReason::ReviewEnded => {
+                                FinishedTurnStatus::Aborted
+                            }
+                        },
+                    );
+                }
+            }
+            EventMsg::ShutdownComplete => {
+                self.clear_control_plane_session("shutdown_complete");
+            }
+            _ => {}
+        }
+    }
+
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
@@ -1341,20 +1636,22 @@ impl App {
 
     async fn enqueue_primary_event(&mut self, event: Event) -> Result<()> {
         if let Some(thread_id) = self.primary_thread_id {
+            self.track_primary_event(&event);
             return self.enqueue_thread_event(thread_id, event).await;
         }
 
         if let EventMsg::SessionConfigured(session) = &event.msg {
             let thread_id = session.session_id;
             self.primary_thread_id = Some(thread_id);
-            self.primary_session_configured = Some(session.clone());
             self.upsert_agent_picker_thread(thread_id, None, None, false);
             self.ensure_thread_channel(thread_id);
             self.activate_thread_channel(thread_id).await;
+            self.track_primary_event(&event);
             self.enqueue_thread_event(thread_id, event).await?;
 
             let pending = std::mem::take(&mut self.pending_primary_events);
             for pending_event in pending {
+                self.track_primary_event(&pending_event);
                 self.enqueue_thread_event(thread_id, pending_event).await?;
             }
         } else {
@@ -1549,6 +1846,8 @@ impl App {
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
+        self.primary_session_configured = None;
+        self.clear_control_plane_session("thread_state_reset");
         self.pending_primary_events.clear();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
@@ -1808,6 +2107,7 @@ impl App {
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
             Self::should_wait_for_initial_session(&session_selection);
+        let control_plane_launch_kind = launch_kind_from_session_selection(&session_selection);
         let mut chat_widget = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let startup_tooltip_override =
@@ -1947,6 +2247,10 @@ impl App {
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
+            control_plane: None,
+            control_plane_launch_kind,
+            control_plane_channel_flow: None,
+            control_plane_wrapper: None,
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -1954,8 +2258,12 @@ impl App {
             active_thread_rx: None,
             primary_thread_id: None,
             primary_session_configured: None,
+            primary_active_turn_id: None,
             pending_primary_events: VecDeque::new(),
         };
+
+        app.maybe_start_control_plane();
+        app.maybe_begin_control_plane_startup_flow();
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -2501,6 +2809,176 @@ impl App {
             }
             AppEvent::OpenFeedbackConsent { category } => {
                 self.chat_widget.open_feedback_consent(category);
+            }
+            AppEvent::OpenChannelsPopup { origin } => {
+                self.control_plane_channel_flow = Some(ChannelSelectionState {
+                    origin,
+                    available_channels: merge_available_channels(
+                        &[],
+                        self.config
+                            .control_plane
+                            .channel_subscriptions
+                            .as_deref()
+                            .unwrap_or_default(),
+                    ),
+                    selected_channels: self
+                        .config
+                        .control_plane
+                        .channel_subscriptions
+                        .clone()
+                        .unwrap_or_default(),
+                });
+                self.maybe_begin_control_plane_startup_flow();
+            }
+            AppEvent::ControlPlaneConsentSelected { consent } => {
+                match persist_control_plane_consent(&self.config.codex_home, consent).await {
+                    Ok(()) => {
+                        self.config.control_plane.consent = Some(consent);
+                        if consent == ControlPlaneConsent::Accepted {
+                            self.maybe_start_control_plane();
+                            self.maybe_open_control_plane_setup_or_picker();
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist control-plane consent");
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save control-plane consent: {err}"
+                        ));
+                    }
+                }
+            }
+            AppEvent::ControlPlaneServerUrlSubmitted { url } => {
+                let url = url.trim().to_string();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_control_plane_server_url(Some(url.as_str()))
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        self.config.control_plane.server_url = Some(url);
+                        self.maybe_open_control_plane_setup_or_picker();
+                    }
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to save channel server URL: {err}"));
+                    }
+                }
+            }
+            AppEvent::ControlPlaneServerTokenSubmitted { token } => {
+                let token = token.trim().to_string();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .set_control_plane_server_token(Some(token.as_str()))
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        self.config.control_plane.server_token = Some(token);
+                        self.maybe_open_control_plane_setup_or_picker();
+                    }
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save channel server token: {err}"
+                        ));
+                    }
+                }
+            }
+            AppEvent::ControlPlaneChannelListLoaded { result } => {
+                match result {
+                    Ok(available_channels) => {
+                        if let Some(flow) = self.control_plane_channel_flow.as_mut() {
+                            flow.available_channels = merge_available_channels(
+                                &available_channels,
+                                &flow.selected_channels,
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to fetch channels from the server: {err}"
+                        ));
+                    }
+                }
+                self.open_control_plane_channel_picker();
+            }
+            AppEvent::ControlPlaneChannelsSelected { channels } => {
+                let saved_channels = self
+                    .config
+                    .control_plane
+                    .channel_subscriptions
+                    .clone()
+                    .unwrap_or_default();
+                if let Some(flow) = self.control_plane_channel_flow.as_mut() {
+                    flow.selected_channels = channels;
+                }
+                let selected_channels = self
+                    .control_plane_channel_flow
+                    .as_ref()
+                    .map(|flow| flow.selected_channels.clone())
+                    .unwrap_or_default();
+                if selected_channels == saved_channels {
+                    self.start_or_update_control_plane_wrapper(selected_channels);
+                    self.control_plane_channel_flow = None;
+                } else {
+                    self.open_control_plane_save_prompt();
+                }
+            }
+            AppEvent::ControlPlaneChannelsSelectionCancelled => {
+                if let Some(flow) = self.control_plane_channel_flow.take()
+                    && flow.origin == crate::app_event::ControlPlaneFlowOrigin::Startup
+                {
+                    let channels = self
+                        .config
+                        .control_plane
+                        .channel_subscriptions
+                        .clone()
+                        .unwrap_or_default();
+                    self.start_or_update_control_plane_wrapper(channels);
+                }
+            }
+            AppEvent::ControlPlaneCreateChannelRequested {
+                available_channels,
+                selected_channels,
+            } => {
+                if let Some(flow) = self.control_plane_channel_flow.as_mut() {
+                    flow.available_channels = available_channels;
+                    flow.selected_channels = selected_channels;
+                }
+                self.show_control_plane_create_channel_prompt();
+            }
+            AppEvent::ControlPlaneCreateChannelSubmitted { name } => {
+                match normalize_channel_name(&name) {
+                    Ok(name) => self.create_control_plane_channel(name),
+                    Err(err) => {
+                        self.chat_widget.add_error_message(err);
+                        self.show_control_plane_create_channel_prompt();
+                    }
+                }
+            }
+            AppEvent::ControlPlaneCreateChannelCompleted { result } => {
+                match result {
+                    Ok(created_channel) => {
+                        if let Some(flow) = self.control_plane_channel_flow.as_mut()
+                            && !flow
+                                .available_channels
+                                .iter()
+                                .any(|channel| channel == &created_channel.channel)
+                        {
+                            flow.available_channels.push(created_channel.channel);
+                            flow.available_channels.sort();
+                        }
+                    }
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("Failed to create channel: {err}"));
+                    }
+                }
+                self.open_control_plane_channel_picker();
+            }
+            AppEvent::ControlPlaneSaveChannelSelection { save } => {
+                self.maybe_save_control_plane_channels(save)?;
+            }
+            AppEvent::ControlPlaneWrapperWarning { message } => {
+                self.chat_widget.add_error_message(message);
             }
             AppEvent::LaunchExternalEditor => {
                 if self.chat_widget.external_editor_state() == ExternalEditorState::Active {
@@ -3991,6 +4469,105 @@ mod tests {
             App::should_handle_active_thread_events(wait_for_initial_session, true),
             true
         );
+    }
+
+    #[tokio::test]
+    async fn control_plane_consent_prompt_opens_when_enabled_without_accepted_consent() {
+        let mut app = make_test_app().await;
+        app.config.control_plane.enabled = true;
+        app.config.control_plane.consent = None;
+
+        app.maybe_open_control_plane_consent_prompt();
+
+        assert!(
+            !app.chat_widget.no_modal_or_popup_active(),
+            "expected control-plane consent prompt to open"
+        );
+    }
+
+    #[tokio::test]
+    async fn primary_thread_events_update_control_plane_runtime_state() -> Result<()> {
+        let mut app = make_test_app().await;
+        let temp_dir = tempdir()?;
+        app.config.control_plane.enabled = true;
+        app.config.control_plane.consent = Some(ControlPlaneConsent::Accepted);
+        app.config.control_plane.ipc_dir = temp_dir.path().join("instances");
+        app.maybe_start_control_plane();
+
+        let thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("thread id");
+        app.enqueue_primary_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: Some("demo".to_string()),
+                model: "gpt-5".to_string(),
+                model_provider_id: "openai".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::OnRequest,
+                sandbox_policy: SandboxPolicy::ReadOnly {
+                    access: codex_protocol::protocol::ReadOnlyAccess::default(),
+                    network_access: false,
+                },
+                cwd: temp_dir.path().to_path_buf(),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: None,
+            }),
+        })
+        .await?;
+        app.enqueue_primary_event(Event {
+            id: String::new(),
+            msg: EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: ModeKind::Default,
+            }),
+        })
+        .await?;
+
+        let snapshot = app
+            .control_plane
+            .as_ref()
+            .expect("control plane should be running")
+            .snapshot();
+        assert_eq!(
+            snapshot.session.expect("session"),
+            codex_control_plane::SessionSnapshot {
+                thread_id: thread_id.to_string(),
+                thread_name: Some("demo".to_string()),
+                cwd: temp_dir.path().to_path_buf(),
+                launch_kind: LaunchKind::Fresh,
+            }
+        );
+        assert_eq!(
+            snapshot.active_turn.expect("active turn"),
+            codex_control_plane::TurnSnapshot {
+                turn_id: "turn-1".to_string(),
+                status: codex_control_plane::TurnStatus::InProgress,
+            }
+        );
+
+        app.enqueue_primary_event(Event {
+            id: String::new(),
+            msg: EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: Some("turn-1".to_string()),
+                reason: TurnAbortReason::Interrupted,
+            }),
+        })
+        .await?;
+
+        let snapshot = app
+            .control_plane
+            .as_ref()
+            .expect("control plane should be running")
+            .snapshot();
+        assert_eq!(snapshot.active_turn, None);
+        Ok(())
     }
 
     #[test]
@@ -5612,6 +6189,10 @@ mod tests {
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
+            control_plane: None,
+            control_plane_launch_kind: LaunchKind::Fresh,
+            control_plane_channel_flow: None,
+            control_plane_wrapper: None,
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -5619,6 +6200,7 @@ mod tests {
             active_thread_rx: None,
             primary_thread_id: None,
             primary_session_configured: None,
+            primary_active_turn_id: None,
             pending_primary_events: VecDeque::new(),
         }
     }
@@ -5672,6 +6254,10 @@ mod tests {
                 suppress_shutdown_complete: false,
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
+                control_plane: None,
+                control_plane_launch_kind: LaunchKind::Fresh,
+                control_plane_channel_flow: None,
+                control_plane_wrapper: None,
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),
@@ -5679,6 +6265,7 @@ mod tests {
                 active_thread_rx: None,
                 primary_thread_id: None,
                 primary_session_configured: None,
+                primary_active_turn_id: None,
                 pending_primary_events: VecDeque::new(),
             },
             rx,
