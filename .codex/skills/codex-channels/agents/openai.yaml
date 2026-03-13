@@ -1,4 +1,0 @@
-interface:
-  display_name: "Codex Channels"
-  short_description: "Send channel messages and manage channels with bundled scripts"
-  default_prompt: "Use the codex-channels skill to list channels, create a channel if needed, or send a message to a specific channel with the bundled scripts instead of writing curl manually. When running the bundled scripts from Codex, use an escalated shell invocation because local control-plane socket discovery is not reliable inside the default shell sandbox."
