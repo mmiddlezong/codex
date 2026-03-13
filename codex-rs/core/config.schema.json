@@ -627,6 +627,10 @@
           "default": null,
           "type": "string"
         },
+        "steer_message_template": {
+          "default": null,
+          "type": "string"
+        },
         "steering_enabled": {
           "default": true,
           "type": "boolean"

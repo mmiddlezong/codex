@@ -573,6 +573,7 @@ pub struct ControlPlaneConfig {
     pub server_url: Option<String>,
     pub server_token: Option<String>,
     pub channel_subscriptions: Option<Vec<String>>,
+    pub steer_message_template: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
@@ -592,6 +593,8 @@ pub struct ControlPlaneConfigToml {
     pub server_token: Option<String>,
     #[serde(default)]
     pub channel_subscriptions: Option<Vec<String>>,
+    #[serde(default)]
+    pub steer_message_template: Option<String>,
 }
 
 impl Default for ControlPlaneConfigToml {
@@ -604,6 +607,7 @@ impl Default for ControlPlaneConfigToml {
             server_url: None,
             server_token: None,
             channel_subscriptions: None,
+            steer_message_template: None,
         }
     }
 }

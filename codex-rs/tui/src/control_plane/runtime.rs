@@ -21,6 +21,10 @@ use url::Url;
 
 use crate::app_event::ControlPlaneCreateChannelResult;
 
+const CHANNEL_PLACEHOLDER: &str = "{channel}";
+const CONTENTS_PLACEHOLDER: &str = "{contents}";
+pub(crate) const DEFAULT_CHANNEL_STEER_MESSAGE_TEMPLATE: &str = "You have received a message from another Codex instance in the channel #{channel}. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n{contents}";
+
 #[derive(Clone)]
 pub(crate) struct ChannelServerClient {
     base_url: String,
@@ -189,13 +193,28 @@ pub(crate) struct RemoteChannelWrapperConfig {
     pub(crate) instance_id: String,
     pub(crate) hostname: String,
     pub(crate) label: Option<String>,
+    pub(crate) steer_message_template: Option<String>,
 }
 
 impl RemoteChannelWrapper {
-    pub(crate) fn start(config: RemoteChannelWrapperConfig) -> Self {
+    pub(crate) fn start(config: RemoteChannelWrapperConfig) -> Option<Self> {
+        let steer_message_template = match resolve_channel_steer_message_template(
+            config.steer_message_template.as_deref(),
+        ) {
+            Ok(template) => template,
+            Err(err) => {
+                send_wrapper_warning(
+                    &config.app_event_tx,
+                    format!(
+                        "channel wrapper disabled because control_plane.steer_message_template is invalid: {err}"
+                    ),
+                );
+                return None;
+            }
+        };
         let (command_tx, command_rx) = mpsc::unbounded_channel();
-        tokio::spawn(run_wrapper(config, command_rx));
-        Self { command_tx }
+        tokio::spawn(run_wrapper(config, steer_message_template, command_rx));
+        Some(Self { command_tx })
     }
 
     pub(crate) fn update_channels(&self, channels: Vec<String>) {
@@ -207,6 +226,7 @@ impl RemoteChannelWrapper {
 
 async fn run_wrapper(
     config: RemoteChannelWrapperConfig,
+    steer_message_template: String,
     mut command_rx: mpsc::UnboundedReceiver<WrapperCommand>,
 ) {
     let mut channels = config.channels;
@@ -300,6 +320,7 @@ async fn run_wrapper(
                                         Ok(ServerMessage::ChannelMessage { message_id, channel, text, metadata, created_at: _created_at }) => {
                                             let receipt = build_receipt(
                                                 &config.local_control_plane,
+                                                &steer_message_template,
                                                 &message_id,
                                                 &channel,
                                                 text.as_str(),
@@ -382,6 +403,7 @@ async fn run_wrapper(
 
 async fn build_receipt(
     local_control_plane: &Arc<LocalControlPlane>,
+    steer_message_template: &str,
     message_id: &str,
     channel: &str,
     text: &str,
@@ -400,7 +422,7 @@ async fn build_receipt(
     let steer_result = local_control_plane
         .apply_steer(ApplySteerRequest {
             expected_turn_id: current_turn.turn_id.clone(),
-            text: format_channel_steer_message(channel, text),
+            text: format_channel_steer_message(steer_message_template, channel, text),
             idempotency_key: message_id.to_string(),
             metadata: Some(json!({
                 "channel": channel,
@@ -443,7 +465,56 @@ async fn build_receipt(
     }
 }
 
-fn format_channel_steer_message(channel: &str, text: &str) -> String {
+pub(crate) fn resolve_channel_steer_message_template(
+    template: Option<&str>,
+) -> Result<String, String> {
+    let template = template.unwrap_or(DEFAULT_CHANNEL_STEER_MESSAGE_TEMPLATE);
+    validate_channel_steer_message_template(template)?;
+    Ok(template.to_string())
+}
+
+fn validate_channel_steer_message_template(template: &str) -> Result<(), String> {
+    if !template.contains(CHANNEL_PLACEHOLDER) {
+        return Err(format!(
+            "missing required placeholder `{CHANNEL_PLACEHOLDER}`"
+        ));
+    }
+    if !template.contains(CONTENTS_PLACEHOLDER) {
+        return Err(format!(
+            "missing required placeholder `{CONTENTS_PLACEHOLDER}`"
+        ));
+    }
+
+    let bytes = template.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'{' => {
+                let Some(end_rel) = template[index + 1..].find('}') else {
+                    return Err("unterminated placeholder in steer_message_template".to_string());
+                };
+                let end = index + 1 + end_rel;
+                let placeholder = &template[index..=end];
+                if placeholder != CHANNEL_PLACEHOLDER && placeholder != CONTENTS_PLACEHOLDER {
+                    return Err(format!(
+                        "unsupported placeholder `{placeholder}` in steer_message_template"
+                    ));
+                }
+                index = end + 1;
+            }
+            b'}' => {
+                return Err("unmatched `}` in steer_message_template".to_string());
+            }
+            _ => {
+                index += 1;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn format_channel_steer_message(template: &str, channel: &str, text: &str) -> String {
     let quoted_message = text
         .split('\n')
         .map(|line| {
@@ -456,9 +527,9 @@ fn format_channel_steer_message(channel: &str, text: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
-    format!(
-        "You have received a message from another Codex instance in the channel {channel}. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n{quoted_message}"
-    )
+    template
+        .replace(CHANNEL_PLACEHOLDER, channel)
+        .replace(CONTENTS_PLACEHOLDER, &quoted_message)
 }
 
 fn send_wrapper_warning(app_event_tx: &AppEventSender, message: String) {
@@ -477,36 +548,98 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Mutex;
     use tempfile::tempdir;
+    use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
     fn format_channel_steer_message_single_line() {
         assert_eq!(
-            format_channel_steer_message("ops", "hello world"),
-            "You have received a message from another Codex instance in the channel ops. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n> hello world"
+            format_channel_steer_message(
+                DEFAULT_CHANNEL_STEER_MESSAGE_TEMPLATE,
+                "ops",
+                "hello world"
+            ),
+            "You have received a message from another Codex instance in the channel #ops. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n> hello world"
         );
     }
 
     #[test]
     fn format_channel_steer_message_multiline() {
         assert_eq!(
-            format_channel_steer_message("ops", "line one\nline two"),
-            "You have received a message from another Codex instance in the channel ops. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n> line one\n> line two"
+            format_channel_steer_message(
+                DEFAULT_CHANNEL_STEER_MESSAGE_TEMPLATE,
+                "ops",
+                "line one\nline two"
+            ),
+            "You have received a message from another Codex instance in the channel #ops. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n> line one\n> line two"
         );
     }
 
     #[test]
     fn format_channel_steer_message_preserves_blank_lines() {
         assert_eq!(
-            format_channel_steer_message("ops", "line one\n\nline three"),
-            "You have received a message from another Codex instance in the channel ops. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n> line one\n>\n> line three"
+            format_channel_steer_message(
+                DEFAULT_CHANNEL_STEER_MESSAGE_TEMPLATE,
+                "ops",
+                "line one\n\nline three"
+            ),
+            "You have received a message from another Codex instance in the channel #ops. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n> line one\n>\n> line three"
         );
     }
 
     #[test]
     fn format_channel_steer_message_preserves_whitespace() {
         assert_eq!(
-            format_channel_steer_message("ops", "  padded  \ntrailing  "),
-            "You have received a message from another Codex instance in the channel ops. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n>   padded  \n> trailing  "
+            format_channel_steer_message(
+                DEFAULT_CHANNEL_STEER_MESSAGE_TEMPLATE,
+                "ops",
+                "  padded  \ntrailing  "
+            ),
+            "You have received a message from another Codex instance in the channel #ops. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n>   padded  \n> trailing  "
+        );
+    }
+
+    #[test]
+    fn resolve_channel_steer_message_template_accepts_default_template() {
+        assert_eq!(
+            resolve_channel_steer_message_template(None).as_deref(),
+            Ok(DEFAULT_CHANNEL_STEER_MESSAGE_TEMPLATE)
+        );
+    }
+
+    #[test]
+    fn resolve_channel_steer_message_template_rejects_missing_channel_placeholder() {
+        let expected = "missing required placeholder `{channel}`".to_string();
+        assert_eq!(
+            resolve_channel_steer_message_template(Some("Hello\n{contents}")).as_deref(),
+            Err(&expected)
+        );
+    }
+
+    #[test]
+    fn resolve_channel_steer_message_template_rejects_missing_contents_placeholder() {
+        let expected = "missing required placeholder `{contents}`".to_string();
+        assert_eq!(
+            resolve_channel_steer_message_template(Some("Hello #{channel}")).as_deref(),
+            Err(&expected)
+        );
+    }
+
+    #[test]
+    fn resolve_channel_steer_message_template_rejects_unknown_placeholder() {
+        let expected = "unsupported placeholder `{oops}` in steer_message_template".to_string();
+        assert_eq!(
+            resolve_channel_steer_message_template(Some("{channel}\n{contents}\n{oops}"))
+                .as_deref(),
+            Err(&expected)
+        );
+    }
+
+    #[test]
+    fn resolve_channel_steer_message_template_allows_repeated_placeholders() {
+        assert_eq!(
+            resolve_channel_steer_message_template(Some("{channel}\n{contents}\n{channel}"))
+                .as_deref(),
+            Ok("{channel}\n{contents}\n{channel}")
         );
     }
 
@@ -562,6 +695,7 @@ mod tests {
 
         let receipt = build_receipt(
             &control_plane,
+            DEFAULT_CHANNEL_STEER_MESSAGE_TEMPLATE,
             "msg-1",
             "ops",
             "hello\n\nworld",
@@ -581,8 +715,44 @@ mod tests {
         assert_eq!(requests[0].1, "turn-1");
         assert_eq!(
             requests[0].2,
-            "You have received a message from another Codex instance in the channel ops. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n> hello\n>\n> world"
+            "You have received a message from another Codex instance in the channel #ops. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n> hello\n>\n> world"
         );
+        std::mem::forget(control_plane);
+    }
+
+    #[tokio::test]
+    async fn invalid_template_prevents_wrapper_start_and_emits_warning() {
+        let delegate = Arc::new(RecordingDelegate::default());
+        let control_plane = test_control_plane(delegate);
+        let (tx_raw, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx_raw);
+
+        let wrapper = RemoteChannelWrapper::start(RemoteChannelWrapperConfig {
+            client: ChannelServerClient::new(
+                "http://127.0.0.1:3000".to_string(),
+                "token".to_string(),
+            ),
+            local_control_plane: control_plane.clone(),
+            app_event_tx,
+            channels: vec!["ops".to_string()],
+            wrapper_id: "wrapper-1".to_string(),
+            instance_id: "instance-1".to_string(),
+            hostname: "host".to_string(),
+            label: None,
+            steer_message_template: Some("Hello {channel}".to_string()),
+        });
+
+        assert_eq!(wrapper.is_none(), true);
+        let event = rx.recv().await.expect("wrapper warning event");
+        match event {
+            AppEvent::ControlPlaneWrapperWarning { message } => {
+                assert_eq!(
+                    message,
+                    "channel wrapper disabled because control_plane.steer_message_template is invalid: missing required placeholder `{contents}`"
+                );
+            }
+            other => panic!("expected wrapper warning event, got {other:?}"),
+        }
         std::mem::forget(control_plane);
     }
 }

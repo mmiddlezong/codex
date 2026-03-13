@@ -926,6 +926,21 @@ impl ConfigEditsBuilder {
         self
     }
 
+    pub fn set_control_plane_steer_message_template(mut self, template: Option<&str>) -> Self {
+        let segments = vec![
+            "control_plane".to_string(),
+            "steer_message_template".to_string(),
+        ];
+        match template {
+            Some(template) => self.edits.push(ConfigEdit::SetPath {
+                segments,
+                value: value(template),
+            }),
+            None => self.edits.push(ConfigEdit::ClearPath { segments }),
+        }
+        self
+    }
+
     pub fn set_windows_sandbox_mode(mut self, mode: &str) -> Self {
         let segments = if let Some(profile) = self.profile.as_ref() {
             vec![

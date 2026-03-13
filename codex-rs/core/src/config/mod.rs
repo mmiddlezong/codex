@@ -2518,6 +2518,7 @@ impl Config {
                     server_url: control_plane.server_url,
                     server_token: control_plane.server_token,
                     channel_subscriptions: control_plane.channel_subscriptions,
+                    steer_message_template: control_plane.steer_message_template,
                 }
             },
             tui_notifications: cfg

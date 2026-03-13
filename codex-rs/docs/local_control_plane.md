@@ -23,6 +23,7 @@ steering_enabled = true
 server_url = "http://127.0.0.1:3000"
 server_token = "replace-me"
 channel_subscriptions = ["ops", "research"]
+steer_message_template = "You have received a message from another Codex instance in the channel #{channel}. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n{contents}"
 
 # Reserved for future server/channel work.
 # Additional server/channel behavior is evolving, but these are now used by
@@ -38,10 +39,14 @@ Defaults:
 - `server_url = unset`
 - `server_token = unset`
 - `channel_subscriptions = unset`
+- `steer_message_template = unset`
 
 When `enabled = true` and consent is not yet accepted, the interactive TUI shows a short startup
 prompt. Accepting persists `consent = "accepted"` and starts the local socket immediately.
 Declining persists `consent = "declined"`, starts no socket, and prompts again on the next launch.
+When consent is persisted and `steer_message_template` is still unset, Codex also writes the
+built-in default steer template into `config.toml` so future customization starts from an explicit
+value.
 
 ## Socket Discovery
 
@@ -82,6 +87,24 @@ printf '%s\n' '{"command":"status"}' | socat - UNIX-CONNECT:/path/to/socket.sock
 - `current-turn`: returns `null` when the primary thread has no in-flight turn, otherwise the
   current primary turn id and `in_progress`.
 - `apply-steer`: applies text steering to the active primary turn only.
+
+## Channel Steer Template
+
+When channel delivery is enabled, incoming channel messages are wrapped into a steer message before
+they are sent to the active turn. The wrapper text can be customized with:
+
+```toml
+[control_plane]
+steer_message_template = "You have received a message from another Codex instance in the channel #{channel}. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n{contents}"
+```
+
+Supported placeholders:
+
+- `{channel}`: the bare channel name such as `ops`
+- `{contents}`: the incoming message body rendered as a quoted block
+
+The configured template must contain both placeholders. If it is invalid, the channel wrapper does
+not start and Codex surfaces a non-blocking warning explaining why channel delivery is disabled.
 
 ## Steering Safety Checks
 

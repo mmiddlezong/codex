@@ -67,6 +67,7 @@ steering_enabled = false
 server_url = "https://example.invalid"
 server_token = "secret-token"
 channel_subscriptions = ["alpha", "beta"]
+steer_message_template = "channel #{{channel}}\n{{contents}}"
 "#,
         ipc_dir.display()
     ))
@@ -82,6 +83,7 @@ channel_subscriptions = ["alpha", "beta"]
             server_url: Some("https://example.invalid".to_string()),
             server_token: Some("secret-token".to_string()),
             channel_subscriptions: Some(vec!["alpha".to_string(), "beta".to_string()]),
+            steer_message_template: Some("channel #{channel}\n{contents}".to_string()),
         })
     );
 }
@@ -104,6 +106,7 @@ async fn control_plane_defaults_resolve_from_codex_home() -> std::io::Result<()>
             server_url: None,
             server_token: None,
             channel_subscriptions: None,
+            steer_message_template: None,
         }
     );
 
@@ -4223,6 +4226,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
                 server_url: None,
                 server_token: None,
                 channel_subscriptions: None,
+                steer_message_template: None,
             },
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
@@ -4368,6 +4372,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
             server_url: None,
             server_token: None,
             channel_subscriptions: None,
+            steer_message_template: None,
         },
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
@@ -4511,6 +4516,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
             server_url: None,
             server_token: None,
             channel_subscriptions: None,
+            steer_message_template: None,
         },
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
@@ -4640,6 +4646,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
             server_url: None,
             server_token: None,
             channel_subscriptions: None,
+            steer_message_template: None,
         },
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,

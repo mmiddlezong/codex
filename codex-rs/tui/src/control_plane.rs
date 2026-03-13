@@ -17,6 +17,7 @@ use codex_control_plane::SteerDelegate;
 use codex_control_plane::SteerError;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::ControlPlaneConsent;
 use codex_protocol::ThreadId;
@@ -28,6 +29,7 @@ use std::sync::Arc;
 
 pub(crate) use channel_picker::ChannelPickerView;
 pub(crate) use runtime::ChannelServerClient;
+pub(crate) use runtime::DEFAULT_CHANNEL_STEER_MESSAGE_TEMPLATE;
 pub(crate) use runtime::RemoteChannelWrapper;
 pub(crate) use runtime::RemoteChannelWrapperConfig;
 
@@ -133,8 +135,23 @@ pub(crate) async fn persist_control_plane_consent(
     codex_home: &Path,
     consent: ControlPlaneConsent,
 ) -> io::Result<()> {
-    ConfigEditsBuilder::new(codex_home)
-        .set_control_plane_consent(consent)
+    let current_config = ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
+        .build()
+        .await
+        .map_err(|err| io::Error::other(format!("failed to load current config: {err}")))?;
+
+    let mut edits = ConfigEditsBuilder::new(codex_home).set_control_plane_consent(consent);
+    if current_config
+        .control_plane
+        .steer_message_template
+        .is_none()
+    {
+        edits = edits
+            .set_control_plane_steer_message_template(Some(DEFAULT_CHANNEL_STEER_MESSAGE_TEMPLATE));
+    }
+
+    edits
         .apply()
         .await
         .map_err(|err| io::Error::other(format!("failed to persist control-plane consent: {err}")))
@@ -301,5 +318,66 @@ impl SteerDelegate for TuiSteerDelegate {
                     SteerError::Error("text must not be empty".to_string())
                 }
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use std::fs;
+    use tempfile::tempdir;
+
+    const CONFIG_TOML_FILE: &str = "config.toml";
+
+    #[tokio::test]
+    async fn persist_control_plane_consent_seeds_default_template_when_unset() -> io::Result<()> {
+        let codex_home = tempdir()?;
+
+        persist_control_plane_consent(codex_home.path(), ControlPlaneConsent::Accepted).await?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await?;
+
+        assert_eq!(
+            config.control_plane.consent,
+            Some(ControlPlaneConsent::Accepted)
+        );
+        assert_eq!(
+            config.control_plane.steer_message_template.as_deref(),
+            Some(DEFAULT_CHANNEL_STEER_MESSAGE_TEMPLATE)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_control_plane_consent_preserves_existing_template() -> io::Result<()> {
+        let codex_home = tempdir()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        fs::write(
+            &config_path,
+            "[control_plane]\nsteer_message_template = \"custom #{channel}\\n{contents}\"\n",
+        )?;
+
+        persist_control_plane_consent(codex_home.path(), ControlPlaneConsent::Accepted).await?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await?;
+
+        assert_eq!(
+            config.control_plane.consent,
+            Some(ControlPlaneConsent::Accepted)
+        );
+        assert_eq!(
+            config.control_plane.steer_message_template.as_deref(),
+            Some("custom #{channel}\n{contents}")
+        );
+
+        Ok(())
     }
 }

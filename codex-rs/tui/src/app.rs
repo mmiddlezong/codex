@@ -936,17 +936,17 @@ impl App {
             return;
         }
 
-        self.control_plane_wrapper =
-            Some(RemoteChannelWrapper::start(RemoteChannelWrapperConfig {
-                client,
-                local_control_plane: Arc::clone(control_plane),
-                app_event_tx: self.app_event_tx.clone(),
-                channels,
-                wrapper_id: wrapper_id.clone(),
-                instance_id: wrapper_id,
-                hostname,
-                label,
-            }));
+        self.control_plane_wrapper = RemoteChannelWrapper::start(RemoteChannelWrapperConfig {
+            client,
+            local_control_plane: Arc::clone(control_plane),
+            app_event_tx: self.app_event_tx.clone(),
+            channels,
+            wrapper_id: wrapper_id.clone(),
+            instance_id: wrapper_id,
+            hostname,
+            label,
+            steer_message_template: self.config.control_plane.steer_message_template.clone(),
+        });
     }
 
     fn maybe_save_control_plane_channels(&mut self, save: bool) -> color_eyre::eyre::Result<()> {
