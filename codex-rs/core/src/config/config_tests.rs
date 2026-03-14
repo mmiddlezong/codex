@@ -87,10 +87,7 @@ CF-Access-Client-Secret = "client-secret"
             server_url: Some("https://example.invalid".to_string()),
             server_token: Some("secret-token".to_string()),
             http_headers: Some(HashMap::from([
-                (
-                    "CF-Access-Client-Id".to_string(),
-                    "client-id".to_string(),
-                ),
+                ("CF-Access-Client-Id".to_string(), "client-id".to_string(),),
                 (
                     "CF-Access-Client-Secret".to_string(),
                     "client-secret".to_string(),

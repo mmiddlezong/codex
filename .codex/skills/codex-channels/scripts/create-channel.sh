@@ -8,10 +8,10 @@ source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: create-channel.sh --server-url URL --token TOKEN [--header 'Name: Value' ...] <channel>
+Usage: create-channel.sh [--server-url URL] [--token TOKEN] <channel>
 
 Create a channel-server channel if it does not already exist.
-Pass any extra headers explicitly with repeated --header flags.
+Custom static headers from [control_plane].http_headers are sent automatically.
 EOF
 }
 

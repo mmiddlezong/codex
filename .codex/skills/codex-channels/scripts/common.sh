@@ -52,6 +52,94 @@ if isinstance(value, str):
 PY
 }
 
+write_config_http_headers_null() {
+  local config_path="${CODEX_CONFIG_PATH:-$CODEX_CHANNELS_DEFAULT_CONFIG_PATH}"
+
+  if [ ! -f "$config_path" ]; then
+    return 0
+  fi
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    die "python3 is required to read ${config_path}; remove [control_plane].http_headers or install python3"
+  fi
+
+  if python3 - "$config_path" <<'PY'
+import sys
+
+config_path = sys.argv[1]
+reserved_headers = {"authorization", "content-type", "host"}
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    raise SystemExit(12)
+
+try:
+    with open(config_path, "rb") as handle:
+        config = tomllib.load(handle)
+except tomllib.TOMLDecodeError:
+    raise SystemExit(13)
+
+headers = config.get("control_plane", {}).get("http_headers")
+if headers is None:
+    raise SystemExit(0)
+
+if not isinstance(headers, dict):
+    print(
+        "error: [control_plane].http_headers must be a table of string header values",
+        file=sys.stderr,
+    )
+    raise SystemExit(14)
+
+for name, value in headers.items():
+    if not isinstance(name, str) or not isinstance(value, str):
+        print(
+            "error: [control_plane].http_headers entries must map header names to string values",
+            file=sys.stderr,
+        )
+        raise SystemExit(14)
+    if name.lower() in reserved_headers:
+        print(
+            f"error: [control_plane].http_headers cannot override reserved header `{name}`",
+            file=sys.stderr,
+        )
+        raise SystemExit(14)
+    if "\n" in name or "\r" in name:
+        print(
+            f"error: [control_plane].http_headers contains invalid header name `{name}`",
+            file=sys.stderr,
+        )
+        raise SystemExit(14)
+    if "\n" in value or "\r" in value:
+        print(
+            f"error: [control_plane].http_headers contains invalid value for `{name}`",
+            file=sys.stderr,
+        )
+        raise SystemExit(14)
+
+    sys.stdout.buffer.write(name.encode("utf-8"))
+    sys.stdout.buffer.write(b"\0")
+    sys.stdout.buffer.write(value.encode("utf-8"))
+    sys.stdout.buffer.write(b"\0")
+PY
+  then
+    return 0
+  else
+    local status=$?
+    case "$status" in
+      12 | 13)
+        die "could not read ${config_path}; fix [control_plane].http_headers or remove it"
+        ;;
+      14)
+        return 14
+        ;;
+      *)
+        die "failed to read ${config_path}; fix [control_plane].http_headers or remove it"
+        ;;
+    esac
+  fi
+}
+
 resolve_control_plane_value() {
   local explicit="$1"
   local env_name="$2"
@@ -97,22 +185,12 @@ resolve_control_plane_value() {
 
 resolve_server_url() {
   local explicit="${1:-}"
-  if [ -n "$explicit" ]; then
-    printf '%s\n' "$explicit"
-    return 0
-  fi
-
-  die "missing server URL; pass --server-url as documented in SKILL.md"
+  resolve_control_plane_value "$explicit" "CHANNEL_SERVER_URL" "server_url" "server URL" "--server-url"
 }
 
 resolve_server_token() {
   local explicit="${1:-}"
-  if [ -n "$explicit" ]; then
-    printf '%s\n' "$explicit"
-    return 0
-  fi
-
-  die "missing server token; pass --token as documented in SKILL.md"
+  resolve_control_plane_value "$explicit" "CHANNEL_SERVER_TOKEN" "server_token" "server token" "--token"
 }
 
 api_request() {
@@ -123,6 +201,7 @@ api_request() {
   shift 4
   local url="${base_url%/}${path}"
   local payload=""
+  local headers_file
   local -a extra_headers=()
 
   while [ "$#" -gt 0 ]; do
@@ -151,6 +230,12 @@ api_request() {
     "$url"
     -H "authorization: Bearer $token"
   )
+  headers_file="$(mktemp)"
+  write_config_http_headers_null >"$headers_file"
+  while IFS= read -r -d '' header_name && IFS= read -r -d '' header_value; do
+    curl_args+=(-H "${header_name}: ${header_value}")
+  done <"$headers_file"
+  rm -f "$headers_file"
   local header
   local header_name
   local normalized_header_name

@@ -58,10 +58,10 @@ impl ChannelServerClient {
             self.http_client.get(self.endpoint("/v1/channels")?),
             &self.http_headers,
         )
-            .header(AUTHORIZATION, format!("Bearer {}", self.token))
-            .send()
-            .await
-            .map_err(|err| format!("failed to fetch channels: {err}"))?;
+        .header(AUTHORIZATION, format!("Bearer {}", self.token))
+        .send()
+        .await
+        .map_err(|err| format!("failed to fetch channels: {err}"))?;
         if !response.status().is_success() {
             return Err(format!(
                 "channel list request failed: HTTP {}",
@@ -84,13 +84,13 @@ impl ChannelServerClient {
             self.http_client.post(self.endpoint("/v1/channels")?),
             &self.http_headers,
         )
-            .header(AUTHORIZATION, format!("Bearer {}", self.token))
-            .json(&CreateChannelRequest {
-                channel: channel.to_string(),
-            })
-            .send()
-            .await
-            .map_err(|err| format!("failed to create channel `{channel}`: {err}"))?;
+        .header(AUTHORIZATION, format!("Bearer {}", self.token))
+        .json(&CreateChannelRequest {
+            channel: channel.to_string(),
+        })
+        .send()
+        .await
+        .map_err(|err| format!("failed to create channel `{channel}`: {err}"))?;
         if !response.status().is_success() {
             return Err(format!(
                 "channel create request failed for `{channel}`: HTTP {}",
@@ -264,7 +264,7 @@ async fn run_wrapper(
     let mut warning_sent = false;
 
     loop {
-        let mut request = match config.client.websocket_request() {
+        let request = match config.client.websocket_request() {
             Ok(request) => request,
             Err(err) => {
                 send_wrapper_warning(&config.app_event_tx, err);

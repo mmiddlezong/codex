@@ -25,9 +25,7 @@ pub(crate) fn build_channel_server_http_headers(
             }
 
             let header_value = HeaderValue::from_str(value.as_str()).map_err(|err| {
-                format!(
-                    "control_plane.http_headers contains invalid value for `{name}`: {err}"
-                )
+                format!("control_plane.http_headers contains invalid value for `{name}`: {err}")
             })?;
             headers.insert(header_name, header_value);
         }
@@ -69,10 +67,7 @@ mod tests {
     #[test]
     fn build_channel_server_http_headers_accepts_custom_headers() {
         let headers = build_channel_server_http_headers(Some(HashMap::from([
-            (
-                "CF-Access-Client-Id".to_string(),
-                "client-id".to_string(),
-            ),
+            ("CF-Access-Client-Id".to_string(), "client-id".to_string()),
             (
                 "CF-Access-Client-Secret".to_string(),
                 "client-secret".to_string(),
@@ -134,7 +129,10 @@ mod tests {
         .expect("request");
 
         let expected = HeaderValue::from_static("client-id");
-        assert_eq!(request.headers().get("cf-access-client-id"), Some(&expected));
+        assert_eq!(
+            request.headers().get("cf-access-client-id"),
+            Some(&expected)
+        );
     }
 
     #[test]
@@ -151,6 +149,9 @@ mod tests {
         apply_channel_server_websocket_headers(&mut request, &headers);
 
         let expected = HeaderValue::from_static("client-id");
-        assert_eq!(request.headers().get("cf-access-client-id"), Some(&expected));
+        assert_eq!(
+            request.headers().get("cf-access-client-id"),
+            Some(&expected)
+        );
     }
 }

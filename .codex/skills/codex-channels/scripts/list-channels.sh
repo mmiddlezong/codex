@@ -8,10 +8,10 @@ source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: list-channels.sh --server-url URL --token TOKEN [--header 'Name: Value' ...]
+Usage: list-channels.sh [--server-url URL] [--token TOKEN]
 
 List available channel-server channels.
-Pass any extra headers explicitly with repeated --header flags.
+Custom static headers from [control_plane].http_headers are sent automatically.
 EOF
 }
 
