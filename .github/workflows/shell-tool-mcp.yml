@@ -22,6 +22,7 @@ env:
 
 jobs:
   metadata:
+    if: github.repository == 'openai/codex'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.compute.outputs.version }}
@@ -68,6 +69,7 @@ jobs:
           echo "should_publish=${should_publish}" >> "$GITHUB_OUTPUT"
 
   bash-linux:
+    if: github.repository == 'openai/codex'
     name: Build Bash (Linux) - ${{ matrix.variant }} - ${{ matrix.target }}
     needs: metadata
     runs-on: ${{ matrix.runner }}
@@ -165,6 +167,7 @@ jobs:
           if-no-files-found: error
 
   bash-darwin:
+    if: github.repository == 'openai/codex'
     name: Build Bash (macOS) - ${{ matrix.variant }} - ${{ matrix.target }}
     needs: metadata
     runs-on: ${{ matrix.runner }}
@@ -206,6 +209,7 @@ jobs:
           if-no-files-found: error
 
   zsh-linux:
+    if: github.repository == 'openai/codex'
     name: Build zsh (Linux) - ${{ matrix.variant }} - ${{ matrix.target }}
     needs: metadata
     runs-on: ${{ matrix.runner }}
@@ -332,6 +336,7 @@ jobs:
           if-no-files-found: error
 
   zsh-darwin:
+    if: github.repository == 'openai/codex'
     name: Build zsh (macOS) - ${{ matrix.variant }} - ${{ matrix.target }}
     needs: metadata
     runs-on: ${{ matrix.runner }}
@@ -410,6 +415,7 @@ jobs:
           if-no-files-found: error
 
   package:
+    if: github.repository == 'openai/codex'
     name: Package npm module
     needs:
       - metadata
@@ -511,7 +517,7 @@ jobs:
     needs:
       - metadata
       - package
-    if: ${{ inputs.publish && needs.metadata.outputs.should_publish == 'true' }}
+    if: ${{ github.repository == 'openai/codex' && inputs.publish && needs.metadata.outputs.should_publish == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write

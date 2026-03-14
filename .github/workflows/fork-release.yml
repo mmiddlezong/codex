@@ -1,0 +1,136 @@
+name: fork-release
+
+on:
+  push:
+    tags:
+      - "fork-v*.*.*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  tag-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate fork tag format
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
+            || { echo "Not a tag push"; exit 1; }
+          [[ "${GITHUB_REF_NAME}" =~ ^fork-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
+            || { echo "Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
+
+  build:
+    needs: tag-check
+    name: Build - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+
+      - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cargo build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --target "${{ matrix.target }}" --release --timings --bin codex
+
+      - name: Build macOS dmg
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="${{ matrix.target }}"
+          release_dir="target/${target}/release"
+          dmg_root="${RUNNER_TEMP}/codex-dmg-root"
+          dmg_path="${release_dir}/codex-${target}.dmg"
+
+          rm -rf "$dmg_root"
+          mkdir -p "$dmg_root"
+          cp "${release_dir}/codex" "${dmg_root}/codex"
+
+          rm -f "$dmg_path"
+          hdiutil create \
+            -volname "Codex (${target})" \
+            -srcfolder "$dmg_root" \
+            -format UDZO \
+            -ov \
+            "$dmg_path"
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="${{ matrix.target }}"
+          release_dir="target/${target}/release"
+          dest="dist/${target}"
+          mkdir -p "$dest"
+
+          cp "${release_dir}/codex" "${dest}/codex-${target}"
+          tar -C "$dest" -czf "${dest}/codex-${target}.tar.gz" "codex-${target}"
+
+          if [[ "${target}" == *apple-darwin ]]; then
+            cp "${release_dir}/codex-${target}.dmg" "${dest}/codex-${target}.dmg"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: codex-rs/dist/${{ matrix.target }}/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+
+      - name: Define release name
+        id: release_name
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#fork-v}"
+          echo "name=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.release_name.outputs.name }}
+          tag_name: ${{ github.ref_name }}
+          files: dist/**/*
+          generate_release_notes: true
+          prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}

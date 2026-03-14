@@ -17,6 +17,7 @@ concurrency:
 
 jobs:
   tag-check:
+    if: github.repository == 'openai/codex'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -46,6 +47,7 @@ jobs:
           echo "::endgroup::"
 
   build:
+    if: github.repository == 'openai/codex'
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
@@ -365,6 +367,7 @@ jobs:
             codex-rs/dist/${{ matrix.target }}/*
 
   build-windows:
+    if: github.repository == 'openai/codex'
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
     with:
@@ -372,6 +375,7 @@ jobs:
     secrets: inherit
 
   shell-tool-mcp:
+    if: github.repository == 'openai/codex'
     name: shell-tool-mcp
     needs: tag-check
     uses: ./.github/workflows/shell-tool-mcp.yml
@@ -381,6 +385,7 @@ jobs:
     secrets: inherit
 
   release:
+    if: github.repository == 'openai/codex'
     needs:
       - build
       - build-windows
@@ -538,7 +543,7 @@ jobs:
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
     # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
-    if: ${{ needs.release.outputs.should_publish_npm == 'true' }}
+    if: ${{ github.repository == 'openai/codex' && needs.release.outputs.should_publish_npm == 'true' }}
     name: publish-npm
     needs: release
     runs-on: ubuntu-latest
@@ -648,7 +653,7 @@ jobs:
     needs: release
     # Only publish stable/mainline releases to WinGet; pre-releases include a
     # '-' in the semver string (e.g., 1.2.3-alpha.1).
-    if: ${{ !contains(needs.release.outputs.version, '-') }}
+    if: ${{ github.repository == 'openai/codex' && !contains(needs.release.outputs.version, '-') }}
     # This job only invokes a GitHub Action to open/update the winget-pkgs PR;
     # it does not execute Windows-only tooling, so Linux is sufficient.
     runs-on: ubuntu-latest
@@ -667,6 +672,7 @@ jobs:
           token: ${{ secrets.WINGET_PUBLISH_PAT }}
 
   update-branch:
+    if: github.repository == 'openai/codex'
     name: Update latest-alpha-cli branch
     permissions:
       contents: write

@@ -10,7 +10,7 @@ jobs:
   gather-labels:
     name: Generate label suggestions
     # Prevent runs on forks (requires OpenAI API key, wastes Actions minutes)
-    if: github.repository == 'openai/codex' && (github.event.action == 'opened' || (github.event.action == 'labeled' && github.event.label.name == 'codex-label'))
+    if: ${{ github.repository == 'openai/codex' && (github.event.action == 'opened' || (github.event.action == 'labeled' && github.event.label.name == 'codex-label')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -89,7 +89,7 @@ jobs:
   apply-labels:
     name: Apply labels from Codex output
     needs: gather-labels
-    if: ${{ needs.gather-labels.result != 'skipped' }}
+    if: ${{ github.repository == 'openai/codex' && needs.gather-labels.result != 'skipped' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

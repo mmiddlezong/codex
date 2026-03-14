@@ -22,6 +22,7 @@ on:
 
 jobs:
   build-windows-binaries:
+    if: github.repository == 'openai/codex'
     name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 60
@@ -119,6 +120,7 @@ jobs:
             codex-rs/target/${{ matrix.target }}/release/staged-${{ matrix.bundle }}/*
 
   build-windows:
+    if: github.repository == 'openai/codex'
     needs:
       - build-windows-binaries
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
