@@ -25,10 +25,14 @@ server_token = "replace-me"
 channel_subscriptions = ["ops", "research"]
 steer_message_template = "You have received a message from another Codex instance in the channel #{channel}. Please continue working after reading this message. You do not need to stop.\n\nContents of the message:\n{contents}"
 
-# Reserved for future server/channel work.
-# Additional server/channel behavior is evolving, but these are now used by
-# the Rust-owned wrapper flow.
+[control_plane.http_headers]
+CF-Access-Client-Id = "replace-me"
+CF-Access-Client-Secret = "replace-me"
 ```
+
+Static `http_headers` are added to remote channel-server HTTP requests and the websocket subscribe
+handshake. This is useful for gateways like Cloudflare Access. Reserved headers
+`authorization`, `content-type`, and `host` remain owned by Codex and cannot be overridden.
 
 Defaults:
 
@@ -38,6 +42,7 @@ Defaults:
 - `steering_enabled = true`
 - `server_url = unset`
 - `server_token = unset`
+- `http_headers = unset`
 - `channel_subscriptions = unset`
 - `steer_message_template = unset`
 

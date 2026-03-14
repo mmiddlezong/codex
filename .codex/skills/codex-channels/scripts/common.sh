@@ -97,12 +97,22 @@ resolve_control_plane_value() {
 
 resolve_server_url() {
   local explicit="${1:-}"
-  resolve_control_plane_value "$explicit" "CHANNEL_SERVER_URL" "server_url" "server URL" "--server-url"
+  if [ -n "$explicit" ]; then
+    printf '%s\n' "$explicit"
+    return 0
+  fi
+
+  die "missing server URL; pass --server-url as documented in SKILL.md"
 }
 
 resolve_server_token() {
   local explicit="${1:-}"
-  resolve_control_plane_value "$explicit" "CHANNEL_SERVER_TOKEN" "server_token" "server token" "--token"
+  if [ -n "$explicit" ]; then
+    printf '%s\n' "$explicit"
+    return 0
+  fi
+
+  die "missing server token; pass --token as documented in SKILL.md"
 }
 
 api_request() {
@@ -110,23 +120,66 @@ api_request() {
   local base_url="$2"
   local token="$3"
   local path="$4"
+  shift 4
   local url="${base_url%/}${path}"
+  local payload=""
+  local -a extra_headers=()
 
-  if [ "$#" -ge 5 ]; then
-    local payload="$5"
-    curl --silent --show-error --fail-with-body \
-      -X "$method" \
-      "$url" \
-      -H "authorization: Bearer $token" \
-      -H "content-type: application/json" \
-      --data "$payload"
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --payload)
+        [ "$#" -ge 2 ] || die "api_request missing payload value"
+        payload="$2"
+        shift 2
+        ;;
+      --header)
+        [ "$#" -ge 2 ] || die "api_request missing header value"
+        extra_headers+=("$2")
+        shift 2
+        ;;
+      *)
+        die "api_request received unexpected argument: $1"
+        ;;
+    esac
+  done
+
+  local -a curl_args=(
+    --silent
+    --show-error
+    --fail-with-body
+    -X "$method"
+    "$url"
+    -H "authorization: Bearer $token"
+  )
+  local header
+  local header_name
+  local normalized_header_name
+  if [ "${#extra_headers[@]}" -gt 0 ]; then
+    for header in "${extra_headers[@]}"; do
+      if [[ "$header" != *:* ]]; then
+        die "invalid header \`${header}\`; expected 'Name: Value'"
+      fi
+      header_name="${header%%:*}"
+      if [ -z "${header_name//[[:space:]]/}" ]; then
+        die "invalid header \`${header}\`; header name must not be empty"
+      fi
+      normalized_header_name="$(printf '%s' "$header_name" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+      case "$normalized_header_name" in
+        authorization | content-type | host)
+          die "header \`${header_name}\` is reserved; do not pass it via --header"
+          ;;
+      esac
+      curl_args+=(-H "$header")
+    done
+  fi
+
+  if [ -n "$payload" ]; then
+    curl_args+=(-H "content-type: application/json" --data "$payload")
+    curl "${curl_args[@]}"
     return
   fi
 
-  curl --silent --show-error --fail-with-body \
-    -X "$method" \
-    "$url" \
-    -H "authorization: Bearer $token"
+  curl "${curl_args[@]}"
 }
 
 validate_channel_slug() {

@@ -8,14 +8,16 @@ source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: create-channel.sh [--server-url URL] [--token TOKEN] <channel>
+Usage: create-channel.sh --server-url URL --token TOKEN [--header 'Name: Value' ...] <channel>
 
 Create a channel-server channel if it does not already exist.
+Pass any extra headers explicitly with repeated --header flags.
 EOF
 }
 
 server_url=""
 token=""
+headers=()
 positionals=()
 
 while [ "$#" -gt 0 ]; do
@@ -28,6 +30,11 @@ while [ "$#" -gt 0 ]; do
     --token|--server-token)
       [ "$#" -ge 2 ] || usage_error "--token requires a value"
       token="$2"
+      shift 2
+      ;;
+    --header)
+      [ "$#" -ge 2 ] || usage_error "--header requires a value"
+      headers+=("$2")
       shift 2
       ;;
     -h|--help)
@@ -62,5 +69,12 @@ validate_channel_slug "$channel"
 resolved_url="$(resolve_server_url "$server_url")"
 resolved_token="$(resolve_server_token "$token")"
 payload="$(build_create_channel_payload_json "$channel")"
-
-api_request "POST" "$resolved_url" "$resolved_token" "/v1/channels" "$payload"
+header_args=()
+if [ "${#headers[@]}" -gt 0 ]; then
+  for header in "${headers[@]}"; do
+    header_args+=(--header "$header")
+  done
+  api_request "POST" "$resolved_url" "$resolved_token" "/v1/channels" --payload "$payload" "${header_args[@]}"
+else
+  api_request "POST" "$resolved_url" "$resolved_token" "/v1/channels" --payload "$payload"
+fi

@@ -572,6 +572,7 @@ pub struct ControlPlaneConfig {
     pub steering_enabled: bool,
     pub server_url: Option<String>,
     pub server_token: Option<String>,
+    pub http_headers: Option<HashMap<String, String>>,
     pub channel_subscriptions: Option<Vec<String>>,
     pub steer_message_template: Option<String>,
 }
@@ -592,6 +593,8 @@ pub struct ControlPlaneConfigToml {
     #[serde(default)]
     pub server_token: Option<String>,
     #[serde(default)]
+    pub http_headers: Option<HashMap<String, String>>,
+    #[serde(default)]
     pub channel_subscriptions: Option<Vec<String>>,
     #[serde(default)]
     pub steer_message_template: Option<String>,
@@ -606,6 +609,7 @@ impl Default for ControlPlaneConfigToml {
             steering_enabled: true,
             server_url: None,
             server_token: None,
+            http_headers: None,
             channel_subscriptions: None,
             steer_message_template: None,
         }

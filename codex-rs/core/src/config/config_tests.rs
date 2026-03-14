@@ -68,6 +68,10 @@ server_url = "https://example.invalid"
 server_token = "secret-token"
 channel_subscriptions = ["alpha", "beta"]
 steer_message_template = "channel #{{channel}}\n{{contents}}"
+
+[control_plane.http_headers]
+CF-Access-Client-Id = "client-id"
+CF-Access-Client-Secret = "client-secret"
 "#,
         ipc_dir.display()
     ))
@@ -82,6 +86,16 @@ steer_message_template = "channel #{{channel}}\n{{contents}}"
             steering_enabled: false,
             server_url: Some("https://example.invalid".to_string()),
             server_token: Some("secret-token".to_string()),
+            http_headers: Some(HashMap::from([
+                (
+                    "CF-Access-Client-Id".to_string(),
+                    "client-id".to_string(),
+                ),
+                (
+                    "CF-Access-Client-Secret".to_string(),
+                    "client-secret".to_string(),
+                ),
+            ])),
             channel_subscriptions: Some(vec!["alpha".to_string(), "beta".to_string()]),
             steer_message_template: Some("channel #{channel}\n{contents}".to_string()),
         })
@@ -105,6 +119,7 @@ async fn control_plane_defaults_resolve_from_codex_home() -> std::io::Result<()>
             steering_enabled: true,
             server_url: None,
             server_token: None,
+            http_headers: None,
             channel_subscriptions: None,
             steer_message_template: None,
         }
@@ -4225,6 +4240,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
                 steering_enabled: true,
                 server_url: None,
                 server_token: None,
+                http_headers: None,
                 channel_subscriptions: None,
                 steer_message_template: None,
             },
@@ -4371,6 +4387,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
             steering_enabled: true,
             server_url: None,
             server_token: None,
+            http_headers: None,
             channel_subscriptions: None,
             steer_message_template: None,
         },
@@ -4515,6 +4532,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
             steering_enabled: true,
             server_url: None,
             server_token: None,
+            http_headers: None,
             channel_subscriptions: None,
             steer_message_template: None,
         },
@@ -4645,6 +4663,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
             steering_enabled: true,
             server_url: None,
             server_token: None,
+            http_headers: None,
             channel_subscriptions: None,
             steer_message_template: None,
         },

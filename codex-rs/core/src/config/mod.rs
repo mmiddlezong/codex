@@ -2517,6 +2517,7 @@ impl Config {
                     steering_enabled: control_plane.steering_enabled,
                     server_url: control_plane.server_url,
                     server_token: control_plane.server_token,
+                    http_headers: control_plane.http_headers,
                     channel_subscriptions: control_plane.channel_subscriptions,
                     steer_message_template: control_plane.steer_message_template,
                 }

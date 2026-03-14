@@ -887,15 +887,33 @@ impl App {
             .show_selection_view(control_plane_save_channels_prompt(&flow.selected_channels));
     }
 
-    fn control_plane_server_client(&self) -> Option<ChannelServerClient> {
-        let server_url = self.config.control_plane.server_url.clone()?;
-        let server_token = self.config.control_plane.server_token.clone()?;
-        Some(ChannelServerClient::new(server_url, server_token))
+    fn control_plane_server_client(
+        &self,
+    ) -> std::result::Result<Option<ChannelServerClient>, String> {
+        let Some(server_url) = self.config.control_plane.server_url.clone() else {
+            return Ok(None);
+        };
+        let Some(server_token) = self.config.control_plane.server_token.clone() else {
+            return Ok(None);
+        };
+
+        ChannelServerClient::new(
+            server_url,
+            server_token,
+            self.config.control_plane.http_headers.clone(),
+        )
+        .map(Some)
     }
 
-    fn fetch_control_plane_channels(&self) {
-        let Some(client) = self.control_plane_server_client() else {
-            return;
+    fn fetch_control_plane_channels(&mut self) {
+        let client = match self.control_plane_server_client() {
+            Ok(Some(client)) => client,
+            Ok(None) => return,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to configure channel server client: {err}"));
+                return;
+            }
         };
         let tx = self.app_event_tx.clone();
         tokio::spawn(async move {
@@ -904,9 +922,15 @@ impl App {
         });
     }
 
-    fn create_control_plane_channel(&self, name: String) {
-        let Some(client) = self.control_plane_server_client() else {
-            return;
+    fn create_control_plane_channel(&mut self, name: String) {
+        let client = match self.control_plane_server_client() {
+            Ok(Some(client)) => client,
+            Ok(None) => return,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to configure channel server client: {err}"));
+                return;
+            }
         };
         let tx = self.app_event_tx.clone();
         tokio::spawn(async move {
@@ -919,8 +943,14 @@ impl App {
         let Some(control_plane) = &self.control_plane else {
             return;
         };
-        let Some(client) = self.control_plane_server_client() else {
-            return;
+        let client = match self.control_plane_server_client() {
+            Ok(Some(client)) => client,
+            Ok(None) => return,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to configure channel server client: {err}"));
+                return;
+            }
         };
         let wrapper_id = control_plane.instance_id().to_string();
         let label = self

@@ -8,19 +8,21 @@ source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat <<'EOF'
-Usage: send-channel-message.sh [--server-url URL] [--token TOKEN] [--idempotency-key KEY] [--exclude-instance-id ID] [--include-self] <channel> [message...]
+Usage: send-channel-message.sh --server-url URL --token TOKEN [--header 'Name: Value' ...] [--idempotency-key KEY] [--exclude-instance-id ID] [--include-self] <channel> [message...]
 
 Send a channel-server message to the given channel.
+Pass any extra headers explicitly with repeated --header flags.
 
 Examples:
-  send-channel-message.sh ops "Please summarize the blocker."
-  printf 'line 1\nline 2\n' | send-channel-message.sh ops
-  send-channel-message.sh --include-self ops "Broadcast this to every subscriber, including me."
+  send-channel-message.sh --server-url URL --token TOKEN ops "Please summarize the blocker."
+  printf 'line 1\nline 2\n' | send-channel-message.sh --server-url URL --token TOKEN ops
+  send-channel-message.sh --server-url URL --token TOKEN --header 'x-example: value' --include-self ops "Broadcast this to every subscriber, including me."
 EOF
 }
 
 server_url=""
 token=""
+headers=()
 idempotency_key=""
 exclude_instance_id=""
 include_self=false
@@ -36,6 +38,11 @@ while [ "$#" -gt 0 ]; do
     --token|--server-token)
       [ "$#" -ge 2 ] || usage_error "--token requires a value"
       token="$2"
+      shift 2
+      ;;
+    --header)
+      [ "$#" -ge 2 ] || usage_error "--header requires a value"
+      headers+=("$2")
       shift 2
       ;;
     --idempotency-key)
@@ -108,4 +115,12 @@ if [ -z "$exclude_instance_id" ] && [ "$include_self" = false ] && [ -n "${CODEX
 fi
 
 payload="$(build_publish_payload_json "$channel" "$message" "$idempotency_key" "$exclude_instance_id")"
-api_request "POST" "$resolved_url" "$resolved_token" "/v1/messages" "$payload"
+header_args=()
+if [ "${#headers[@]}" -gt 0 ]; then
+  for header in "${headers[@]}"; do
+    header_args+=(--header "$header")
+  done
+  api_request "POST" "$resolved_url" "$resolved_token" "/v1/messages" --payload "$payload" "${header_args[@]}"
+else
+  api_request "POST" "$resolved_url" "$resolved_token" "/v1/messages" --payload "$payload"
+fi

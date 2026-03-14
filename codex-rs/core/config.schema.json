@@ -611,6 +611,13 @@
           "default": false,
           "type": "boolean"
         },
+        "http_headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": null,
+          "type": "object"
+        },
         "ipc_dir": {
           "allOf": [
             {

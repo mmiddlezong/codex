@@ -1,13 +1,20 @@
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::control_plane::server_headers::apply_channel_server_http_headers;
+use crate::control_plane::server_headers::apply_channel_server_websocket_headers;
+use crate::control_plane::server_headers::build_channel_server_http_headers;
 use codex_control_plane::ApplySteerRequest;
 use codex_control_plane::LocalControlPlane;
 use futures::SinkExt;
 use futures::StreamExt;
 use reqwest::Client;
+use reqwest::header::AUTHORIZATION;
+use reqwest::header::HeaderMap;
+use reqwest::header::HeaderValue;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -15,8 +22,6 @@ use tokio::time::sleep;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::HeaderValue;
-use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use url::Url;
 
 use crate::app_event::ControlPlaneCreateChannelResult;
@@ -30,22 +35,30 @@ pub(crate) struct ChannelServerClient {
     base_url: String,
     token: String,
     http_client: Client,
+    http_headers: HeaderMap,
 }
 
 impl ChannelServerClient {
-    pub(crate) fn new(base_url: String, token: String) -> Self {
-        Self {
+    pub(crate) fn new(
+        base_url: String,
+        token: String,
+        http_headers: Option<HashMap<String, String>>,
+    ) -> Result<Self, String> {
+        let http_headers = build_channel_server_http_headers(http_headers)?;
+        Ok(Self {
             base_url,
             token,
             http_client: Client::new(),
-        }
+            http_headers,
+        })
     }
 
     pub(crate) async fn list_channels(&self) -> Result<Vec<String>, String> {
-        let response = self
-            .http_client
-            .get(self.endpoint("/v1/channels")?)
-            .header("authorization", format!("Bearer {}", self.token))
+        let response = apply_channel_server_http_headers(
+            self.http_client.get(self.endpoint("/v1/channels")?),
+            &self.http_headers,
+        )
+            .header(AUTHORIZATION, format!("Bearer {}", self.token))
             .send()
             .await
             .map_err(|err| format!("failed to fetch channels: {err}"))?;
@@ -67,10 +80,11 @@ impl ChannelServerClient {
         &self,
         channel: &str,
     ) -> Result<ControlPlaneCreateChannelResult, String> {
-        let response = self
-            .http_client
-            .post(self.endpoint("/v1/channels")?)
-            .header("authorization", format!("Bearer {}", self.token))
+        let response = apply_channel_server_http_headers(
+            self.http_client.post(self.endpoint("/v1/channels")?),
+            &self.http_headers,
+        )
+            .header(AUTHORIZATION, format!("Bearer {}", self.token))
             .json(&CreateChannelRequest {
                 channel: channel.to_string(),
             })
@@ -117,6 +131,22 @@ impl ChannelServerClient {
             _ => return Err(format!("unsupported server URL scheme `{}`", url.scheme())),
         }
         Ok(url)
+    }
+
+    fn websocket_request(
+        &self,
+    ) -> Result<tokio_tungstenite::tungstenite::http::Request<()>, String> {
+        let websocket_url = self.websocket_url()?;
+        let mut request = websocket_url
+            .as_str()
+            .into_client_request()
+            .map_err(|err| format!("failed to build wrapper websocket request: {err}"))?;
+        apply_channel_server_websocket_headers(&mut request, &self.http_headers);
+
+        let authorization = HeaderValue::from_str(&format!("Bearer {}", self.token))
+            .map_err(|err| format!("failed to encode wrapper authorization header: {err}"))?;
+        request.headers_mut().insert(AUTHORIZATION, authorization);
+        Ok(request)
     }
 }
 
@@ -234,35 +264,13 @@ async fn run_wrapper(
     let mut warning_sent = false;
 
     loop {
-        let websocket_url = match config.client.websocket_url() {
-            Ok(websocket_url) => websocket_url,
+        let mut request = match config.client.websocket_request() {
+            Ok(request) => request,
             Err(err) => {
                 send_wrapper_warning(&config.app_event_tx, err);
                 return;
             }
         };
-        let mut request = match websocket_url.as_str().into_client_request() {
-            Ok(request) => request,
-            Err(err) => {
-                send_wrapper_warning(
-                    &config.app_event_tx,
-                    format!("failed to build wrapper websocket request: {err}"),
-                );
-                return;
-            }
-        };
-        let authorization = match HeaderValue::from_str(&format!("Bearer {}", config.client.token))
-        {
-            Ok(authorization) => authorization,
-            Err(err) => {
-                send_wrapper_warning(
-                    &config.app_event_tx,
-                    format!("failed to encode wrapper authorization header: {err}"),
-                );
-                return;
-            }
-        };
-        request.headers_mut().insert(AUTHORIZATION, authorization);
 
         match connect_async(request).await {
             Ok((mut socket, _response)) => {
@@ -731,7 +739,9 @@ mod tests {
             client: ChannelServerClient::new(
                 "http://127.0.0.1:3000".to_string(),
                 "token".to_string(),
-            ),
+                None,
+            )
+            .expect("client"),
             local_control_plane: control_plane.clone(),
             app_event_tx,
             channels: vec!["ops".to_string()],
